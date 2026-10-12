@@ -34,7 +34,7 @@ Files: `使用说明.txt`, `README.md`, `docs/release-checks.md`.
 - [x] Build using `tools/build.ps1 -Python .build-venv\Scripts\python.exe`. Inspect the built manifest and portable rule selection without launching the software.
 - [x] Obtain a read-only code review; do not launch the GUI or run tests.
 - [x] Publish to the exact release directory after checking resolved paths and running-process state; preserve the old folder as `InvoiceSummary-0.1.1-archive`.
-- [ ] Record build/review scope, commit source changes, and package `release/InvoiceSummary` using `tools/package_release.py`.
+- [x] Record build/review scope, commit source changes, and package `release/InvoiceSummary` using `tools/package_release.py`.
 
 ## Coverage
 
