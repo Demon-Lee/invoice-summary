@@ -13,19 +13,35 @@ from . import __version__
 from .controller import Controller, resource_root, application_root
 from .updates import EngineStore, export_update, read_manifest
 
-HELP = """1. 选择包含完整批次发票的文件夹，以及需要更新的 .xlsx 工作簿。
-2. 点击“只读预览”。此步骤不会重命名 PDF，也不会保存工作簿。
-3. 查看文件命名、明细金额、异常和表格映射。异常解决后重新预览。
-4. 预览通过后点击“执行处理”。软件会重命名发票、更新工作簿、设置字体、调用 Excel 重算，并逐票复核金额。
-5. 查看实际结果和临时文件清理状态。
+EXECUTION_STEPS = (
+    "1. 选择完整批次的 PDF 文件夹和目标 .xlsx 工作簿。",
+    "2. 点击“只读预览”，核对文件名、明细、金额和异常。",
+    "3. 预览通过后点击“执行处理”，等待完成。",
+    "4. 查看金额复核结果和临时文件清理状态。",
+)
+NECESSARY_CONDITIONS = (
+    "Windows 10/11，已安装 Microsoft Excel 桌面版。",
+    "有文本层的电子 PDF；选择完整批次，不支持扫描件。",
+    "约定格式的 .xlsx，含“验收”“领用”、表头、日期与三行页脚。",
+    "执行前关闭目标工作簿；软件和输入文件所在目录须可写。",
+)
+PROCESS_NOTICE = "执行会重命名 PDF，并直接更新原工作簿；不自动创建备份。"
+HELP_HEADINGS = ("执行步骤", "必要条件", "工作簿详细要求", "处理与恢复", "识别原则", "规则更新与分发")
+HELP = "\n".join(("执行步骤", *EXECUTION_STEPS, "", PROCESS_NOTICE, "", "必要条件", *NECESSARY_CONDITIONS)) + """
 
-工作簿须包含“验收”“领用”两张表，且各有完整表头、唯一三行页脚（合计、签字、说明）和日期标签。请选择 .xlsx，执行前关闭 Excel 中的目标工作簿。
+工作簿详细要求
+工作簿须包含“验收”“领用”两张表，且各有完整表头、唯一三行页脚（合计、签字、说明）和日期标签。表内已有明细须在所选完整 PDF 批次中找到对应发票。
 
-软件原位更新所选工作簿，不自动创建备份。出现重名、字段不确定、金额不一致或模板结构异常时停止，不提供强制覆盖。
+处理与恢复
+只读预览不会重命名 PDF，也不会保存工作簿。预览通过后才可执行：软件会改名、更新表格、设置字体、调用 Excel 重算，并逐票复核金额。出现重名、字段不确定、金额不一致或模板结构异常时停止，不提供强制覆盖。解决异常后重新预览。
 
+如果 Excel 操作或金额验证失败，解决原因后重新选择同一批次和工作簿进行只读预览，可继续未完成的处理。重启软件后仍可恢复；恢复期间请保持发票内容及识别版本一致。
+
+识别原则
 识别依据与 skill 相同：从 PDF 内容读取字段，合并规定的折扣与运费，保留重复明细，空数量按 1，金额逐分核对。当前不支持扫描图片 OCR。
 
-规则更新：在“规则与更新”中选择可信的 summarize-invoice-pdfs 文件夹，点击“同步本机 skill”。同步成功后，新规则保存在软件文件夹里的 recognition 目录。关闭软件，把整个软件文件夹打包发给别人，对方完整解压后直接运行即可使用随包规则。请一并保留 _internal 和 recognition 两个文件夹。
+规则更新与分发
+在“规则与更新”中选择可信的 summarize-invoice-pdfs 文件夹，点击“同步本机 skill”。同步成功后，新规则保存在软件文件夹里的 recognition 目录。关闭软件，把整个软件文件夹打包发给别人，对方完整解压后直接运行即可使用随包规则。请一并保留 _internal 和 recognition 两个文件夹。
 
 同步规则需要软件文件夹可写。你的本机 skill 路径绑定仅保存在本机；接收方无需绑定 skill 或导入规则包。仍可单独导出、导入离线更新包。处理时固定使用界面显示的识别版本。
 
@@ -87,7 +103,7 @@ class App:
         if icon.exists():
             self.root.iconbitmap(str(icon))
         self.root.geometry("1140x820")
-        self.root.minsize(900, 650)
+        self.root.minsize(900, 760)
         self.root.configure(bg="#f4f7fb")
         style = ttk.Style()
         style.theme_use("clam")
@@ -95,6 +111,11 @@ class App:
         style.configure("TFrame", background="#f4f7fb")
         style.configure("TLabel", background="#f4f7fb", foreground="#18304e")
         style.configure("Title.TLabel", font=("Microsoft YaHei UI", 22, "bold"))
+        for name, background, foreground in (("Steps", "#eaf3ff", "#173b68"), ("Conditions", "#fff4dc", "#674515")):
+            style.configure(f"{name}.TFrame", background=background)
+            style.configure(f"{name}Title.TLabel", background=background, foreground=foreground, font=("Microsoft YaHei UI", 14, "bold"))
+            style.configure(f"{name}Body.TLabel", background=background, foreground="#243d55")
+        style.configure("Notice.TLabel", foreground="#874026", font=("Microsoft YaHei UI", 10, "bold"))
         style.configure("TButton", padding=(12, 8))
         style.configure("Treeview", rowheight=32, background="white", fieldbackground="white")
         style.configure("Treeview.Heading", font=("Microsoft YaHei UI", 10, "bold"), padding=8)
@@ -112,25 +133,33 @@ class App:
         tabs.add(rules, text="规则与更新")
         tabs.add(help_tab, text="使用说明")
         process.columnconfigure(1, weight=1)
-        process.rowconfigure(5, weight=1)
-        for row, label, variable, action in ((0, "PDF 文件夹", self.pdf, self._pick_pdf), (1, "目标工作簿", self.book, self._pick_book)):
+        process.rowconfigure(6, weight=1)
+        guidance = ttk.Frame(process)
+        guidance.grid(row=0, column=0, columnspan=3, sticky="ew", pady=(0, 8))
+        guidance.columnconfigure((0, 1), weight=1, uniform="guidance")
+        self._guide_card(guidance, 0, "执行步骤", EXECUTION_STEPS, "Steps", (0, 6))
+        self._guide_card(guidance, 1, "必要条件", NECESSARY_CONDITIONS, "Conditions", (6, 0))
+        notice = ttk.Label(guidance, text=PROCESS_NOTICE, style="Notice.TLabel", wraplength=780)
+        notice.grid(row=1, column=0, columnspan=2, sticky="w", pady=(8, 0))
+        guidance.bind("<Configure>", lambda event: notice.configure(wraplength=max(180, event.width)))
+        for row, label, variable, action in ((1, "PDF 文件夹", self.pdf, self._pick_pdf), (2, "目标工作簿", self.book, self._pick_book)):
             ttk.Label(process, text=label).grid(row=row, column=0, sticky="w", padx=(0, 12), pady=6)
             entry = ttk.Entry(process, textvariable=variable)
             entry.grid(row=row, column=1, sticky="ew", pady=6)
             self.interactive.append(entry)
             self._button(process, "选择", action).grid(row=row, column=2, padx=(10, 0))
         buttons = ttk.Frame(process)
-        buttons.grid(row=2, column=0, columnspan=3, sticky="w", pady=(12, 8))
+        buttons.grid(row=3, column=0, columnspan=3, sticky="w", pady=(12, 8))
         self._button(buttons, "只读预览", self._preview).pack(side="left", padx=(0, 8))
         self.execute = self._button(buttons, "执行处理", self._apply)
         self.execute.pack(side="left", padx=(0, 8))
         self.execute.configure(state="disabled")
         self._button(buttons, "打开发票目录", lambda: self._open(self.pdf.get())).pack(side="left", padx=(0, 8))
         self._button(buttons, "打开工作簿", lambda: self._open(self.book.get())).pack(side="left")
-        ttk.Label(process, textvariable=self.summary, wraplength=950).grid(row=3, column=0, columnspan=3, sticky="w", pady=(8, 4))
-        ttk.Label(process, text="完整批次明细（已有发票也会显示）").grid(row=4, column=0, columnspan=3, sticky="w", pady=(6, 4))
+        ttk.Label(process, textvariable=self.summary, wraplength=950).grid(row=4, column=0, columnspan=3, sticky="w", pady=(8, 4))
+        ttk.Label(process, text="完整批次明细（已有发票也会显示）").grid(row=5, column=0, columnspan=3, sticky="w", pady=(6, 4))
         table = ttk.Frame(process)
-        table.grid(row=5, column=0, columnspan=3, sticky="nsew")
+        table.grid(row=6, column=0, columnspan=3, sticky="nsew")
         table.rowconfigure(0, weight=1)
         table.columnconfigure(0, weight=1)
         columns = ("sequence", "filename", "spec", "unit", "quantity", "amount")
@@ -144,9 +173,9 @@ class App:
         scroll = ttk.Scrollbar(table, orient="horizontal", command=self.tree.xview)
         scroll.grid(row=1, column=0, sticky="ew")
         self.tree.configure(yscrollcommand=vertical.set, xscrollcommand=scroll.set)
-        ttk.Label(process, text="检查、异常与实际结果").grid(row=6, column=0, columnspan=3, sticky="w", pady=(10, 4))
-        self.report = self._text(process, height=7)
-        self.report.grid(row=7, column=0, columnspan=3, sticky="ew")
+        ttk.Label(process, text="检查、异常与实际结果").grid(row=7, column=0, columnspan=3, sticky="w", pady=(10, 4))
+        self.report = self._text(process, height=5)
+        self.report.grid(row=8, column=0, columnspan=3, sticky="ew")
         ttk.Label(outer, textvariable=self.status).pack(anchor="w", pady=(12, 5))
         self.progress_bar = ttk.Progressbar(outer, mode="indeterminate")
         self.progress_bar.pack(fill="x")
@@ -170,6 +199,24 @@ class App:
         text_widget = self._text(help_tab)
         text_widget.pack(fill="both", expand=True)
         self._set_text(text_widget, HELP)
+        text_widget.tag_configure("section", font=("Microsoft YaHei UI", 16, "bold"), foreground="#173b68", spacing1=12, spacing3=8)
+        for line_number, line in enumerate(HELP.splitlines(), 1):
+            if line in HELP_HEADINGS:
+                text_widget.tag_add("section", f"{line_number}.0", f"{line_number}.end")
+
+    def _guide_card(self, parent, column, title, items, style_name, padding):
+        card = ttk.Frame(parent, padding=(14, 10), style=f"{style_name}.TFrame")
+        card.grid(row=0, column=column, sticky="nsew", padx=padding)
+        ttk.Label(card, text=title, style=f"{style_name}Title.TLabel").pack(anchor="w", pady=(0, 6))
+        labels = []
+        for item in items:
+            label = ttk.Label(card, text=item, style=f"{style_name}Body.TLabel", wraplength=400, justify="left")
+            label.pack(anchor="w", fill="x", pady=2)
+            labels.append(label)
+        def update_wrap(event):
+            for label in labels:
+                label.configure(wraplength=max(180, event.width - 28))
+        card.bind("<Configure>", update_wrap)
 
     def _text(self, parent, height=15):
         return tk.Text(parent, height=height, wrap="word", bg="white", fg="#243d55", relief="flat", padx=10, pady=8, font=("Microsoft YaHei UI", 10), state="disabled")

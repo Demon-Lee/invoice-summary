@@ -19,21 +19,21 @@
 
 Files: `invoice_desktop/app.py`, `invoice_desktop/__init__.py`.
 
-- [ ] Define four numbered execution steps and four necessary conditions, using the existing button names and actual file requirements.
-- [ ] Place two colored cards in process grid row 0, shift the existing rows by one, keep the table row expanding, and shorten the report to five lines. Use card-width events to update label wrapping. Use a bold section title style and explicit headings so meaning is independent of color.
-- [ ] Place the original-file mutation notice immediately below the cards. Set the minimum window to 900 × 760.
-- [ ] Begin HELP with the same steps and requirements; tag its headings with a larger bold font. Preserve detailed template, recovery and rule update information.
-- [ ] Set `__version__ = "0.1.2"`.
+- [x] Define four numbered execution steps and four necessary conditions, using the existing button names and actual file requirements.
+- [x] Place two colored cards in process grid row 0, shift the existing rows by one, keep the table row expanding, and shorten the report to five lines. Use card-width events to update label wrapping. Use a bold section title style and explicit headings so meaning is independent of color.
+- [x] Place the original-file mutation notice immediately below the cards. Set the minimum window to 900 × 760.
+- [x] Begin HELP with the same steps and requirements; tag its headings with a larger bold font. Preserve detailed template, recovery and rule update information.
+- [x] Set `__version__ = "0.1.2"`.
 
 ## Task 2: Documentation and distribution
 
 Files: `使用说明.txt`, `README.md`, `docs/release-checks.md`.
 
-- [ ] Put numbered execution steps first, necessary conditions second, then recovery, workbook details and rule maintenance. Make the two plain-text headings stand out with separators.
-- [ ] Update README to the same section order and document the visible guidance.
-- [ ] Build using `tools/build.ps1 -Python .build-venv\Scripts\python.exe`. Inspect the built manifest and portable rule selection without launching the software.
-- [ ] Obtain a read-only code review; do not launch the GUI or run tests.
-- [ ] Publish to the exact release directory after checking resolved paths and running-process state; preserve the old folder as `InvoiceSummary-0.1.1-archive`.
+- [x] Put numbered execution steps first, necessary conditions second, then recovery, workbook details and rule maintenance. Make the two plain-text headings stand out with separators.
+- [x] Update README to the same section order and document the visible guidance.
+- [x] Build using `tools/build.ps1 -Python .build-venv\Scripts\python.exe`. Inspect the built manifest and portable rule selection without launching the software.
+- [x] Obtain a read-only code review; do not launch the GUI or run tests.
+- [x] Publish to the exact release directory after checking resolved paths and running-process state; preserve the old folder as `InvoiceSummary-0.1.1-archive`.
 - [ ] Record build/review scope, commit source changes, and package `release/InvoiceSummary` using `tools/package_release.py`.
 
 ## Coverage
