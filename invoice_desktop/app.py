@@ -71,6 +71,9 @@ class App:
 
     def _build(self):
         self.root.title("发票汇总助手")
+        icon = resource_root() / "resources/app.ico"
+        if icon.exists():
+            self.root.iconbitmap(str(icon))
         self.root.geometry("1140x820")
         self.root.minsize(900, 650)
         self.root.configure(bg="#f4f7fb")
@@ -264,7 +267,7 @@ class App:
             return
         self._invalidate()
         directory, book = self.pdf.get(), self.book.get()
-        self.controller = Controller(self.store.active(), lambda msg: self.events.put(("progress", msg)))
+        self.controller = Controller(self.store.active(), lambda msg: self.events.put(("progress", msg)), state_dir=self.state_dir / "runs")
         self._run(lambda: self.controller.preview(directory, book), self._render_preview)
 
     def _render_preview(self, preview):
@@ -277,6 +280,8 @@ class App:
         for name, details in preview.sheet_details.items():
             parts.append(f"{name}：表头、字段映射、页脚与日期检查通过；待移除末尾空行 {details['blankRowsToRemove']} 行")
         parts.append("异常：\n" + "\n".join(preview.issues) if preview.issues else "异常：无；只读预览通过，尚未改动文件。")
+        if preview.resume_pending:
+            parts.append("检测到上次处理未完成；本次将继续字体、重算和金额验证，缺失的改名或明细也会补齐。")
         if preview.clean and not preview.has_changes:
             parts.append("没有新增、改名或多余末尾空行，无需处理。")
         self._set_text(self.report, "\n".join(parts))
@@ -315,6 +320,8 @@ class App:
             actual = result["rename_plan"]
             parts.append(f"实际改名：{sum(p['status']=='renamed' for p in actual)} 个；未完成：{sum(p['status']=='not_completed' for p in actual)} 个")
         totals = result.get("totals", {})
+        if result.get("blank_rows_removed"):
+            parts.append("实际移除末尾空行：" + "；".join(f"{name} {count} 行" for name, count in result["blank_rows_removed"].items()))
         if totals:
             parts.append(f"PDF 合计 ¥{result['total']} · 验收合计 ¥{totals.get('acceptance_footer_total')} · 领用合计 ¥{totals.get('issue_footer_total')}")
         if result.get("verification", {}).get("exceptions"):

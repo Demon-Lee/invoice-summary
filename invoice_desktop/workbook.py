@@ -1,6 +1,7 @@
 """Template-preserving workbook planning and staged in-place writes."""
 import datetime
 import os
+import re
 import tempfile
 import warnings
 from collections import defaultdict, deque
@@ -11,6 +12,7 @@ from pathlib import Path
 
 from openpyxl import load_workbook
 from openpyxl.cell.cell import MergedCell
+from openpyxl.formula import Tokenizer
 from openpyxl.styles import Alignment
 from openpyxl.utils import get_column_letter
 from openpyxl.worksheet.cell_range import CellRange
@@ -19,6 +21,7 @@ from openpyxl.workbook.properties import CalcProperties
 
 HEADERS = ("序号", "产品名称", "规格型号", "单位", "数量", "单价", "金额")
 SIGNERS = {"验收": ("经办人", "验收人"), "领用": ("保管人", "领用人")}
+SAFE_FORMULA_FUNCTIONS = {"SUM", "MIN", "MAX", "AVERAGE", "COUNT", "COUNTA", "PRODUCT", "ROUND", "ROUNDUP", "ROUNDDOWN", "ABS", "IF", "IFERROR", "AND", "OR", "NOT", "TEXT"}
 
 
 def text(value):
@@ -149,6 +152,36 @@ def _shift_rows(ws, start, delta):
         ws.print_area = [rng.coord for rng in print_ranges]
 
 
+def _remap_formula(value, sheet, row_maps):
+    """Track references to moved cells, including absolute and cross-sheet refs."""
+    tokens = Tokenizer(value).items
+    for token in tokens:
+        if token.type == "FUNC" and token.subtype == "OPEN" and token.value[:-1].upper() not in SAFE_FORMULA_FUNCTIONS:
+            raise ValueError(f"{sheet} 公式函数无法安全随行移动：{value}")
+        if token.type != "OPERAND" or token.subtype != "RANGE":
+            continue
+        prefix, reference = token.value.rsplit("!", 1) if "!" in token.value else ("", token.value)
+        target_sheet = prefix.strip("'").replace("''", "'") if prefix else sheet
+        if prefix and ("[" in prefix or ":" in prefix):
+            raise ValueError(f"{sheet} 外部或跨表区域公式无法安全随行移动：{value}")
+        parts = reference.split(":")
+        mapped = []
+        for part in parts:
+            match = re.fullmatch(r"(\$?[A-Za-z]{1,3}\$?)([1-9][0-9]*)", part)
+            if match:
+                row = int(match[2])
+                moved = row_maps.get(target_sheet, {}).get(row, row)
+                if moved is None:
+                    raise ValueError(f"{sheet} 公式引用待删除的空行，无法安全移动：{value}")
+                mapped.append(match[1] + str(moved))
+            elif re.fullmatch(r"\$?[A-Za-z]{1,3}", part) and len(parts) == 2:
+                mapped.append(part)
+            else:
+                raise ValueError(f"{sheet} 命名或特殊区域公式无法安全随行移动：{value}")
+        token.value = (prefix + "!" if prefix else "") + ":".join(mapped)
+    return "=" + "".join(token.value for token in tokens)
+
+
 @dataclass
 class WorkbookPlan:
     path: Path
@@ -177,9 +210,12 @@ def plan_workbook(path, payload, run_date=None):
         day = run_date or datetime.date.today()
         date_text = f"{day.year}.{day.month}.{day.day}"
         removed, details, added_counts = {}, {}, []
+        formulas = [(ws.title, c.row, c.column, c.value) for ws in wb for row in ws for c in row if c.data_type == "f"]
+        row_maps, regenerated = {}, set()
         for name in SIGNERS:
             ws = wb[name]
             header, columns, footer, date_col = inspect_sheet(ws)
+            original_footer, original_max_row = footer, ws.max_row
             template_row = header + 1
             template_styles = [copy(c._style) for c in ws[template_row]]
             template_height = ws.row_dimensions[template_row].height
@@ -220,7 +256,9 @@ def plan_workbook(path, payload, run_date=None):
             slots = sorted(destinations.values())
             if not new and [destinations[i] for i in range(len(rows))] != slots:
                 raise ValueError(f"{name} 已有明细顺序与原始发票存在冲突")
+            original_destinations = dict(destinations)
             destinations = dict(enumerate(slots))
+            row_maps[name] = {original_destinations[i]: destinations[i] for i in matched}
             for index, r in destinations.items():
                 row = rows[index]
                 if index in metadata:
@@ -256,12 +294,33 @@ def plan_workbook(path, payload, run_date=None):
             removed[name] = count
             _shift_rows(ws, footer, -count)
             footer -= count
+            for r in range(original_footer, original_max_row+1):
+                row_maps[name][r] = r + footer - original_footer
+            # Removed original blank rows must not silently become invoice refs.
+            for r in range(header+1, original_footer):
+                if r not in row_maps[name] and r > last_content:
+                    row_maps[name][r] = None
+            for i in matched:
+                regenerated.add((name, original_destinations[i], columns["单价"]))
+            for label in ("数量", "金额"):
+                regenerated.add((name, original_footer, columns[label]))
             for label in ("数量", "金额"):
                 letter = get_column_letter(columns[label])
                 ws.cell(footer, columns[label], f"=SUM({letter}{header+1}:{letter}{footer-1})" if footer > header+1 else "=0")
             ws.cell(footer+1, date_col, date_text)
             details[name] = {"headerRow": header, "footerRow": footer, "columns": columns, "rowsToAdd": len(new), "blankRowsToRemove": count}
             inspect_sheet(ws)
+        moved = any(old != new for mapping in row_maps.values() for old, new in mapping.items())
+        if moved:
+            if wb.defined_names:
+                raise ValueError("工作簿包含命名区域，当前无法安全随行移动，请调整模板")
+            for name, row, col, formula in formulas:
+                if (name, row, col) in regenerated:
+                    continue
+                target_row = row_maps.get(name, {}).get(row, row)
+                if target_row is None or not isinstance(formula, str):
+                    raise ValueError(f"{name} 公式无法安全随行移动")
+                wb[name].cell(target_row, col, _remap_formula(formula, name, row_maps))
         wb.calculation = CalcProperties(calcId=0, fullCalcOnLoad=True, forceFullCalc=True)
         return WorkbookPlan(path, wb, max(added_counts), removed, sum((r["amount"] for r in rows), Decimal("0.00")), details)
     except Exception:

@@ -1,4 +1,5 @@
 import json
+import shutil
 import tempfile
 import unittest
 import zipfile
@@ -20,7 +21,7 @@ class UpdateTests(unittest.TestCase):
         (self.skill / "scripts").mkdir(parents=True)
         (self.skill / "SKILL.md").write_text("rules v1", encoding="utf-8")
         for name in ("invoice_pipeline.py", "collect_excel_totals.py"):
-            (self.skill / "scripts" / name).write_text("def main(argv=None):\n    return 0\n", encoding="utf-8")
+            shutil.copyfile(Path(__file__).resolve().parents[1] / "engine" / name, self.skill / "scripts" / name)
         (self.skill / "scripts/apply_mixed_fonts_excel.ps1").write_text("# fonts", encoding="utf-8")
         (self.skill / "scripts/write_summary.mjs").write_text("// workbook v1", encoding="utf-8")
         archive = self.root / "base.zip"
@@ -67,6 +68,27 @@ class UpdateTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.store.install(bad)
         self.assertFalse((self.root / "outside.py").exists())
+
+    def test_incompatible_main_signature_never_activates(self):
+        parser = self.skill / "scripts/invoice_pipeline.py"
+        parser.write_text("def main():\n    return 0\n", encoding="utf-8")
+        with self.assertRaisesRegex(ValueError, "接口"):
+            self.store.sync(self.skill)
+        self.assertEqual(self.store.active(), self.bundled)
+
+    def test_missing_required_helper_never_activates(self):
+        parser = self.skill / "scripts/invoice_pipeline.py"
+        parser.write_text(parser.read_text(encoding="utf-8").replace("def is_verification_report_pdf(", "def removed_helper("), encoding="utf-8")
+        with self.assertRaisesRegex(ValueError, "接口"):
+            self.store.sync(self.skill)
+        self.assertEqual(self.store.active(), self.bundled)
+
+    def test_incompatible_preview_output_never_activates(self):
+        parser = self.skill / "scripts/invoice_pipeline.py"
+        parser.write_text(parser.read_text(encoding="utf-8") + '\ndef main(argv=None):\n    Path(argv[argv.index("--report") + 1]).write_text("{}", encoding="utf-8")\n    return 0\n', encoding="utf-8")
+        with self.assertRaisesRegex(ValueError, "接口"):
+            self.store.sync(self.skill)
+        self.assertEqual(self.store.active(), self.bundled)
 
 
 if __name__ == "__main__":

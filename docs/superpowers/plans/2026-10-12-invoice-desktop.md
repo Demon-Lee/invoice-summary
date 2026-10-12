@@ -1,6 +1,6 @@
 # Invoice Desktop Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking. Execute inline; no delegated work is required.
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [x]`) syntax for tracking. Execute inline; no delegated work is required.
 
 **Goal:** Deliver a Windows offline invoice app with exact-cent verification and compatible offline skill updates.
 
@@ -33,47 +33,51 @@
 
 ### Task 1: Shared recognition snapshot and updates
 
-- [ ] Copy only the four whitelisted skill files, record original writer SHA-256, do not include node_modules.
-- [ ] Add tests that fail before `EngineStore` exists: ZIP traversal/hash mismatch rejected; SKILL.md-only changes rejected; compatible parser change produces a new immutable snapshot.
-- [ ] Implement manifest `format_version=1`, SHA-256 file map, writer marker, API validation of `main(argv)` and dependency import smoke check.
-- [ ] Validate with `python -m unittest tests.test_updates -v`; expect all checks pass and rejected packages leave active pointer unchanged.
-- [ ] Commit engine snapshot and update implementation.
+- [x] Copy only the four whitelisted skill files, record original writer SHA-256, do not include node_modules.
+- [x] Add tests that fail before `EngineStore` exists: ZIP traversal/hash mismatch rejected; SKILL.md-only changes rejected; compatible parser change produces a new immutable snapshot.
+- [x] Implement manifest `format_version=1`, SHA-256 file map, writer marker, API validation of `main(argv)` and dependency import smoke check.
+- [x] Validate with `python -m unittest tests.test_updates -v`; expect all checks pass and rejected packages leave active pointer unchanged.
+- [x] Commit engine snapshot and update implementation.
 
 ### Task 2: Workbook writer parity
 
-- [ ] Write tests before implementation for dry-run immutability, duplicate keys, quantity normalization, conflicts, unique footer/date labels and expanded/compacted footer row heights/merges.
-- [ ] Map one unique row containing all required headers; map manufacturer by prefix. Validate the exact three-row footer and single signature date label.
-- [ ] Match existing rows by `(sequence, product, spec, occurrence)` and compare business values. Block missing source invoices or conflicting fields. Append missing records in source order while retaining remarks/internal blank rows.
-- [ ] Stage changes in memory, explicitly remap footer merges, row dimensions and print areas, copy template styles for added rows, refresh SUM and unit-price formulas.
-- [ ] Save to a current-run sibling staging file, reopen to validate structure, then `os.replace` the selected workbook. Always remove failed staging files.
-- [ ] Run `python -m unittest tests.test_workbook -v`; inspect expected final formulas and both footers, then commit.
+- [x] Write tests before implementation for dry-run immutability, duplicate keys, quantity normalization, conflicts, unique footer/date labels and expanded/compacted footer row heights/merges.
+- [x] Map one unique row containing all required headers; map manufacturer by prefix. Validate the exact three-row footer and single signature date label.
+- [x] Match existing rows by `(sequence, product, spec, occurrence)` and compare business values. Block missing source invoices or conflicting fields. Append missing records in source order while retaining remarks/internal blank rows.
+- [x] Stage changes in memory, explicitly remap footer merges, row dimensions and print areas, copy template styles for added rows, refresh SUM and unit-price formulas.
+- [x] Save to a current-run sibling staging file, reopen to validate structure, then `os.replace` the selected workbook. Always remove failed staging files.
+- [x] Run `python -m unittest tests.test_workbook -v`; inspect expected final formulas and both footers, then commit.
 
 ### Task 3: Pipeline controller and Excel adapter
 
-- [ ] Add tests for preview exception/collision/amount blocking, mutation calls denied when blocked, changed input rejection, cleanup on failure, and verification `failed` despite exit code zero.
-- [ ] Invoke pinned engine `main` with redirected output and current-run report paths. Validate payload schemas and money before writer planning.
-- [ ] Snapshot SHA-256 of workbook and selected directory PDF members; require exact equality immediately before apply.
-- [ ] Check Excel COM registration and workbook lock on Windows, run existing font/recalculation script using hidden noninteractive PowerShell.
-- [ ] Apply rename, writer, Excel, totals, verification sequentially; record completed stages and precise failures. Inspect every exceptions/status field.
-- [ ] Run `python -m unittest tests.test_controller -v`; then test generated workbook via actual Excel, commit.
+- [x] Add tests for preview exception/collision/amount blocking, mutation calls denied when blocked, changed input rejection, cleanup on failure, and verification `failed` despite exit code zero.
+- [x] Invoke pinned engine `main` with redirected output and current-run report paths. Validate payload schemas and money before writer planning.
+- [x] Snapshot SHA-256 of workbook and selected directory PDF members; require exact equality immediately before apply.
+- [x] Check Excel COM registration and workbook lock on Windows, run existing font/recalculation script using hidden noninteractive PowerShell.
+- [x] Apply rename, writer, Excel, totals, verification sequentially; record completed stages and precise failures. Inspect every exceptions/status field.
+- [x] Run `python -m unittest tests.test_controller -v`; then test generated workbook via actual Excel, commit.
 
 ### Task 4: Desktop interface and usage
 
-- [ ] Build path pickers, preview Treeview, summary/status text and disabled execute button until a clean preview.
-- [ ] Worker threads never touch tkinter; use queue and `after` for progress, results and exceptions; refuse close during active processing.
-- [ ] Add source-skill binding, changed version detection, sync/import/export and previous-engine rollback controls. Display active engine hash and software version.
-- [ ] Add result-folder buttons and embedded use/update instructions; no automatic backups, force-continue buttons or silent compatibility claims.
-- [ ] Add a startup diagnostic JSON command for package dependency checks; verify GUI initializes in a hidden smoke mode.
-- [ ] Commit UI and user documentation.
+- [x] Build path pickers, preview Treeview, summary/status text and disabled execute button until a clean preview.
+- [x] Worker threads never touch tkinter; use queue and `after` for progress, results and exceptions; refuse close during active processing.
+- [x] Add source-skill binding, changed version detection, sync/import/export and previous-engine rollback controls. Display active engine hash and software version.
+- [x] Add result-folder buttons and embedded use/update instructions; no automatic backups, force-continue buttons or silent compatibility claims.
+- [x] Add a startup diagnostic JSON command for package dependency checks; verify GUI initializes in a hidden smoke mode.
+- [x] Commit UI and user documentation.
 
 ### Task 5: Windows distribution and release checks
 
-- [ ] Create isolated build environment, install pinned build dependency, build a PyInstaller windowed distribution containing engine and PowerShell resources.
-- [ ] Include Python package third-party license notices, source version, source update export tool and Chinese quick-start instructions.
-- [ ] Run full `python -m unittest discover -s tests -v` and the original skill parser/collector Python regressions once. Repeat only for changes/failures.
-- [ ] Execute packaged diagnostic and hidden GUI smoke; perform temporary-copy full pipeline with real Excel and check original hashes unchanged.
-- [ ] Zip the portable distribution, report path, version, verification evidence and any packaging limitation.
+- [x] Create isolated build environment, install pinned build dependency, build a PyInstaller windowed distribution containing engine and PowerShell resources.
+- [x] Include Python package third-party license notices, source version, source update export tool and Chinese quick-start instructions.
+- [x] Run full `python -m unittest discover -s tests -v` and the original skill parser/collector Python regressions once. Repeat only for changes/failures.
+- [ ] Execute packaged diagnostic and hidden GUI smoke; perform temporary-copy full pipeline with real Excel and check original hashes unchanged. Source GUI and temporary-copy pipeline checks were completed; final packaged runtime checks are deferred. See docs/release-checks.md.
+- [x] Zip the portable distribution, report path, version, verification evidence and any packaging limitation.
 
 ## Coverage and Self-review
 
 Every design section maps to Tasks 1–5. Update safety is Task 1; workbook principles Task 2; pipeline protection and cleanup Task 3; user flow Task 4; offline artifact and source delivery Task 5. No invoice data is included in repository or release. All interfaces above use the same parameter names across tasks.
+
+## Review fixes
+
+Formula references now follow mapped cells; unsupported functions and special references block preview. Pending runs persist the recognition version, invoice content hashes and successful workbook-write phase, enabling safe resumption after an Excel failure. Updates validate signatures, required helpers, dependency loads and generated-input output contracts before activation. Final two refinements received read-only review without a new regression run.

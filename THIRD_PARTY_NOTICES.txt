@@ -1,0 +1,18 @@
+Third-party notices for InvoiceSummary
+
+This distribution bundles the following open-source libraries. Full license texts are in _internal/resources/licenses.
+
+pdfplumber 0.11.9 — resources\licenses\pdfplumber\LICENSE.txt
+pdfminer.six 20251230 — resources\licenses\pdfminer.six\LICENSE
+Pillow 12.3.0 — resources\licenses\Pillow\LICENSE
+pypdfium2 5.14.0 — resources\licenses\pypdfium2\Apache-2.0.txt, resources\licenses\pypdfium2\BSD-3-Clause.txt, resources\licenses\pypdfium2\CC-BY-4.0.txt, resources\licenses\pypdfium2\abseil.txt, resources\licenses\pypdfium2\agg23.txt, resources\licenses\pypdfium2\fast_float.txt, resources\licenses\pypdfium2\freetype.txt, resources\licenses\pypdfium2\icu.txt, resources\licenses\pypdfium2\lcms.txt, resources\licenses\pypdfium2\libjpeg_turbo.ijg, resources\licenses\pypdfium2\libjpeg_turbo.md, resources\licenses\pypdfium2\libopenjpeg.txt, resources\licenses\pypdfium2\libpng.txt, resources\licenses\pypdfium2\llvm-libc.txt, resources\licenses\pypdfium2\pdfium-binaries.txt, resources\licenses\pypdfium2\pdfium.txt, resources\licenses\pypdfium2\simdutf.txt, resources\licenses\pypdfium2\zlib.txt
+openpyxl 3.1.5 — resources\licenses\openpyxl\LICENCE.rst
+lxml 6.1.1 — resources\licenses\lxml\LICENSE.txt, resources\licenses\lxml\LICENSES.txt
+et_xmlfile 2.0.0 — resources\licenses\et_xmlfile\LICENCE.python, resources\licenses\et_xmlfile\LICENCE.rst
+cryptography 50.0.2 — resources\licenses\cryptography\LICENSE, resources\licenses\cryptography\LICENSE.APACHE, resources\licenses\cryptography\LICENSE.BSD
+cffi 2.1.1 — resources\licenses\cffi\LICENSE
+pycparser 3.0 — resources\licenses\pycparser\LICENSE
+charset-normalizer 3.5.2 — resources\licenses\charset-normalizer\LICENSE
+pyinstaller 6.22.3 — resources\licenses\pyinstaller\COPYING.txt
+
+Python, Tcl/Tk and the PyInstaller bootloader are included. Microsoft Excel is an external user-installed application. OpenAI artifact-tool is not bundled.

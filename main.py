@@ -31,9 +31,11 @@ def main():
         data = pipeline_smoke(args.pipeline_smoke, resource_root() / "engine")
     elif args.diagnose:
         import tkinter
+        from invoice_desktop.diagnostics import update_smoke
         data = {"software_version": __version__, "engine_version": read_manifest(resource_root() / "engine")["version"],
                 "pdfplumber": pdfplumber.__version__, "openpyxl": openpyxl.__version__, "tkinter": tkinter.TkVersion,
-                "resources": all((resource_root() / "resources" / name).exists() for name in ("check_excel.ps1", "run_excel.ps1"))}
+                "resources": all((resource_root() / "resources" / name).exists() for name in ("check_excel.ps1", "run_excel.ps1")),
+                "offline_update": update_smoke(resource_root() / "engine")}
     else:
         import tkinter as tk
         from invoice_desktop.app import App

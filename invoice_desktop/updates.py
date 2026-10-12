@@ -1,7 +1,11 @@
 """Versioned, offline snapshots of the user's invoice skill."""
 import ast
+import contextlib
 import hashlib
+import importlib
 import importlib.util
+import inspect
+import io
 import json
 import os
 import re
@@ -57,21 +61,89 @@ def read_manifest(directory):
 
 
 def validate_python(directory):
+    required = {"invoice_pipeline.py": {"main": 1, "is_verification_report_pdf": 1},
+                "collect_excel_totals.py": {"main": 1, "collect_excel_totals": 1}}
+    modules = {}
     for name in ("invoice_pipeline.py", "collect_excel_totals.py"):
         source = (Path(directory) / name).read_text(encoding="utf-8-sig")
         tree = ast.parse(source, filename=name)
-        if not any(isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == "main" for node in tree.body):
-            raise ValueError(f"识别接口不兼容：{name} 缺少 main(argv)")
+        functions = {node.name: node for node in tree.body if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))}
+        for function in required[name]:
+            node = functions.get(function)
+            if not isinstance(node, ast.FunctionDef):
+                raise ValueError(f"识别接口不兼容：{name} 缺少同步函数 {function}")
+            positional = node.args.posonlyargs + node.args.args
+            if ((not positional and node.args.vararg is None) or len(positional)-len(node.args.defaults) > 1
+                    or any(default is None for default in node.args.kw_defaults)):
+                raise ValueError(f"识别接口不兼容：{name} 的 {function} 无法接收单个参数")
         for node in ast.walk(tree):
-            imported = [a.name.split(".")[0] for a in node.names] if isinstance(node, ast.Import) else (
-                [node.module.split(".")[0]] if isinstance(node, ast.ImportFrom) and node.module and not node.level else [])
+            imported = [a.name for a in node.names] if isinstance(node, ast.Import) else (
+                [node.module] if isinstance(node, ast.ImportFrom) and node.module and not node.level else [])
             for module in imported:
                 try:
-                    available = importlib.util.find_spec(module) is not None
-                except (ImportError, ValueError):
-                    available = False
-                if not available:
-                    raise ValueError(f"更新需要新增依赖 {module}，请升级主程序")
+                    importlib.import_module(module)
+                except Exception as exc:
+                    raise ValueError(f"更新依赖 {module} 无法加载，请升级主程序：{exc}") from exc
+        try:
+            from .controller import load_engine
+            loaded = load_engine(directory, name)
+            for function, count in required[name].items():
+                callable_value = getattr(loaded, function)
+                if inspect.iscoroutinefunction(callable_value):
+                    raise TypeError("不支持异步入口")
+                inspect.signature(callable_value).bind(*([None] * count))
+            modules[name] = loaded
+        except (Exception, SystemExit) as exc:
+            raise ValueError(f"识别接口无法加载：{name}：{exc}") from exc
+    _validate_output_contract(modules)
+
+
+def _validate_output_contract(modules):
+    """Exercise all shared CLI contracts only against generated empty inputs."""
+    from openpyxl import Workbook
+    with tempfile.TemporaryDirectory(prefix="invoice-contract-") as temp:
+        root = Path(temp)
+        def invoke(module, args, filename):
+            target = root / filename
+            with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+                status = module.main([*args, "--output" if filename == "totals.json" else "--report", str(target)])
+            if status not in (None, 0):
+                raise ValueError("入口返回失败")
+            result = json.loads(target.read_text(encoding="utf-8"))
+            if not isinstance(result, dict):
+                raise ValueError("结果不是对象")
+            return result
+        try:
+            parser = modules["invoice_pipeline.py"]
+            preview = invoke(parser, ["preview", "--pdf-dir", str(root)], "preview.json")
+            if not all(isinstance(preview.get(key), list) for key in ("records", "rename_plan", "exceptions")):
+                raise ValueError("预览字段不完整")
+            records = root / "records.json"
+            records.write_text('{"records": [], "exceptions": []}', encoding="utf-8")
+            renamed = invoke(parser, ["rename", "--records", str(records), "--apply"], "rename.json")
+            if not all(isinstance(renamed.get(key), list) for key in ("records", "rename_plan", "exceptions")):
+                raise ValueError("改名字段不完整")
+            wb = Workbook()
+            wb.remove(wb.active)
+            for title, first, second in (("验收", "经办人", "验收人"), ("领用", "保管人", "领用人")):
+                ws = wb.create_sheet(title)
+                ws.append(["序号", "金额"])
+                ws.append(["合计", 0])
+                ws.cell(3, 1, first + "：")
+                ws.cell(3, 4, second + "：")
+                ws.cell(4, 1, "说明：接口检查")
+            book = root / "generated.xlsx"
+            wb.save(book)
+            wb.close()
+            totals = invoke(modules["collect_excel_totals.py"], ["--input", str(book)], "totals.json")
+            if totals != {"sequences": {}, "acceptance_footer_total": "0.00", "issue_footer_total": "0.00"}:
+                raise ValueError("金额汇总字段不兼容")
+            verified = invoke(parser, ["verify", "--records", str(records), "--excel-totals", str(root / "totals.json")], "verify.json")
+            if (not isinstance(verified.get("verification"), list) or not isinstance(verified.get("exceptions"), list)
+                    or verified.get("batch_verification", {}).get("status") != "passed"):
+                raise ValueError("验证字段不完整")
+        except (Exception, SystemExit) as exc:
+            raise ValueError(f"识别接口输出不兼容：{exc}") from exc
 
 
 def check_compatible(candidate, baseline):

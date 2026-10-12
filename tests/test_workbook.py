@@ -138,6 +138,29 @@ class WorkbookTests(unittest.TestCase):
         self.addCleanup(wb.close)
         self.assertEqual(wb["验收"]["B4"].data_type, "s")
 
+    def test_moved_remark_formulas_keep_relative_absolute_and_sheet_dependencies(self):
+        first = payload()["records"][0]["rows"][0]
+        second = dict(first, sequence=2, product_name="第二发票", amount="20.00")
+        write_workbook(plan_workbook(self.path, payload([first, second])))
+        wb = load_workbook(self.path)
+        wb["验收"]["I5"] = "=G5+$G$5+'领用'!G5+G4"
+        wb.save(self.path)
+        wb.close()
+        before = self.path.read_bytes()
+        plan = plan_workbook(self.path, payload([first, dict(first, amount="5.66"), second]))
+        self.assertEqual(self.path.read_bytes(), before)
+        self.assertEqual(plan.workbook["验收"]["I6"].value, "=G6+$G$6+'领用'!G6+G4")
+        write_workbook(plan)
+
+    def test_footer_formula_reference_moves_with_compaction(self):
+        wb = load_workbook(self.path)
+        wb["验收"]["I8"] = "=G7"
+        wb.save(self.path)
+        wb.close()
+        plan = plan_workbook(self.path, payload())
+        self.assertEqual(plan.workbook["验收"]["I6"].value, "=G5")
+        plan.workbook.close()
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -34,7 +34,7 @@ class ControllerTests(unittest.TestCase):
         self.data["rename_plan"] = [dict(source=str(self.pdf), destination=str(self.pdf_dir / "1. 测试器材.pdf"), status="ready", sequence=1)]
         engine = Path(__file__).resolve().parents[1] / "engine"
         self.calls = []
-        self.controller = Controller(engine, excel=FakeExcel())
+        self.controller = Controller(engine, excel=FakeExcel(), state_dir=self.root / "run-state")
         from invoice_desktop.updates import sha256
         self.controller._fingerprints = lambda directory, workbook: {str(p): sha256(p) for p in [workbook, *sorted(directory.glob('*.pdf'))]}
         def invoke(kind, args, report):
@@ -111,6 +111,47 @@ class ControllerTests(unittest.TestCase):
         path.write_text("from __future__ import annotations\nfrom dataclasses import dataclass\n@dataclass\nclass Entry:\n    value: int = 1\n", encoding="utf-8")
         module = load_engine(self.root, "model.py")
         self.assertEqual(module.Entry().value, 1)
+
+    def test_failed_excel_run_can_resume_after_application_restart(self):
+        class FailingExcel(FakeExcel):
+            def apply(self, script, workbook):
+                raise ValueError("simulated Excel failure")
+        self.controller.excel = FailingExcel()
+        failed = self.controller.apply(self.controller.preview(self.pdf_dir, self.book))
+        self.assertEqual(failed["status"], "failed")
+        renamed = self.pdf_dir / "1. 测试器材.pdf"
+        self.data["records"][0]["pdf"] = str(renamed)
+        self.data["rename_plan"] = [dict(source=str(renamed), destination=str(renamed), status="unchanged", sequence=1)]
+        fresh = Controller(self.controller.engine_dir, excel=FakeExcel(), state_dir=self.root / "run-state")
+        fresh._fingerprints = self.controller._fingerprints
+        def invoke(kind, args, report):
+            self.calls.append((kind, args))
+            if "preview" in args:
+                return copy.deepcopy(self.data)
+            if "rename" in args:
+                return dict(exceptions=[], rename_plan=copy.deepcopy(self.data["rename_plan"]))
+            if "verify" in args:
+                return dict(exceptions=[], verification=[dict(status="passed")], batch_verification=dict(status="passed"))
+            return dict(sequences={"1": "12.34"}, acceptance_footer_total="12.34", issue_footer_total="12.34")
+        fresh._invoke = invoke
+        preview = fresh.preview(self.pdf_dir, self.book)
+        self.assertTrue(preview.clean)
+        self.assertEqual(preview.rows_to_add, 0)
+        self.assertTrue(preview.resume_pending)
+        self.assertTrue(preview.has_changes)
+        result = fresh.apply(preview)
+        self.assertEqual(result["status"], "completed")
+        self.assertFalse(fresh.preview(self.pdf_dir, self.book).has_changes)
+
+    def test_pending_run_blocks_changed_invoice_content(self):
+        self.controller.apply(self.controller.preview(self.pdf_dir, self.book))
+        renamed = self.pdf_dir / "1. 测试器材.pdf"
+        self.data["records"][0]["pdf"] = str(renamed)
+        self.data["rename_plan"] = [dict(source=str(renamed), destination=str(renamed), status="unchanged", sequence=1)]
+        renamed.write_bytes(b"different invoice")
+        preview = self.controller.preview(self.pdf_dir, self.book)
+        self.assertFalse(preview.clean)
+        self.assertTrue(any("未完成" in item for item in preview.issues))
 
 
 if __name__ == "__main__":

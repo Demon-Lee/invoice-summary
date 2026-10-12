@@ -3,6 +3,7 @@ import contextlib
 import ctypes
 import importlib.util
 import io
+import hashlib
 import json
 import os
 import shutil
@@ -77,6 +78,7 @@ class Preview:
     blank_rows_to_remove: dict = field(default_factory=dict)
     sheet_details: dict = field(default_factory=dict)
     total: str = "0.00"
+    resume_pending: bool = False
 
     @property
     def clean(self):
@@ -84,16 +86,42 @@ class Preview:
 
     @property
     def has_changes(self):
-        return self.rows_to_add > 0 or any(self.blank_rows_to_remove.values()) or any(e.get("status") == "ready" for e in self.payload.get("rename_plan", []))
+        return self.resume_pending or self.rows_to_add > 0 or any(self.blank_rows_to_remove.values()) or any(e.get("status") == "ready" for e in self.payload.get("rename_plan", []))
 
 
 class Controller:
-    def __init__(self, engine_dir, progress=None, excel=None):
+    def __init__(self, engine_dir, progress=None, excel=None, state_dir=None):
         self.engine_dir = Path(engine_dir).resolve()
         self.progress = progress or (lambda message: None)
         self.excel = excel or ExcelAdapter()
         self.last_scratch = None
         self.cleanup_error = None
+        self.state_dir = Path(state_dir or Path(os.environ.get("LOCALAPPDATA", str(Path.home()))) / "InvoiceSummary/runs").resolve()
+
+    def _pending_path(self, directory, workbook):
+        key = hashlib.sha256(json.dumps([str(directory).casefold(), str(workbook).casefold()]).encode()).hexdigest()
+        return self.state_dir / (key + ".json")
+
+    def _invoice_hashes(self, fingerprints, workbook):
+        return sorted(digest for path, digest in fingerprints.items() if path != str(workbook))
+
+    def _save_pending(self, preview, workbook_written=None):
+        self.state_dir.mkdir(parents=True, exist_ok=True)
+        path = self._pending_path(preview.pdf_dir, preview.workbook)
+        staged = path.with_suffix(".staged.json")
+        state = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {
+            "engine_version": preview.engine_version,
+            "invoice_hashes": self._invoice_hashes(preview.fingerprints, preview.workbook),
+            "workbook_written": False}
+        if workbook_written is not None:
+            state["workbook_written"] = workbook_written
+        try:
+            staged.write_text(json.dumps(state, indent=2), encoding="utf-8")
+            os.replace(staged, path)
+        finally:
+            if staged.exists():
+                staged.unlink()
+        return state
 
     @contextlib.contextmanager
     def _scratch(self):
@@ -158,6 +186,17 @@ class Controller:
             report = scratch / "preview.json"
             data = self._invoke("pipeline", ["preview", "--pdf-dir", str(directory), "--report", str(report)], report)
             result = Preview(directory, book, self.engine_dir, manifest["version"], data, before)
+            pending = self._pending_path(directory, book)
+            if pending.exists():
+                result.resume_pending = True
+                try:
+                    state = json.loads(pending.read_text(encoding="utf-8"))
+                    if state["engine_version"] != result.engine_version:
+                        result.issues.append("上次处理未完成，请先回退到原识别版本再继续处理")
+                    if state["invoice_hashes"] != self._invoice_hashes(before, book):
+                        result.issues.append("上次处理未完成且发票内容或批次已变化，请恢复原批次后继续")
+                except (OSError, ValueError, KeyError) as exc:
+                    result.issues.append("未完成处理记录无法读取：" + str(exc))
             for item in data.get("exceptions", []):
                 result.issues.append(f"{Path(item.get('pdf', '')).name} · {item.get('field', '')}：{item.get('message', '')}")
             records = data.get("records", [])
@@ -229,6 +268,9 @@ class Controller:
             return dict(status="no_change", total=preview.total, completed=[], cleanup="完成", payload=preview.payload)
         self.progress("正在检查 Excel 与文件写入权限…")
         self.excel.check(preview.workbook)
+        pending_state = self._save_pending(preview)
+        skip_write = (preview.resume_pending and pending_state.get("workbook_written")
+                      and not preview.rows_to_add and not any(preview.blank_rows_to_remove.values()))
         result = dict(status="failed", completed=[], total=preview.total, payload=preview.payload, engine_version=preview.engine_version)
         with self._scratch() as scratch:
             try:
@@ -248,11 +290,13 @@ class Controller:
                             or any(p["status"] not in ("renamed", "unchanged") or sha256(p["destination"]) != preview.fingerprints[p["source"]] for p in result["rename_plan"])):
                         raise ValueError("发票改名未完成：" + json.dumps(renamed.get("exceptions", []), ensure_ascii=False))
                     result["completed"].append("发票改名")
-                    self.progress("正在原位写入工作簿…")
-                    write_workbook(writer_plan)
+                    if not skip_write:
+                        self.progress("正在原位写入工作簿…")
+                        write_workbook(writer_plan)
+                        self._save_pending(preview, workbook_written=True)
                 finally:
                     writer_plan.workbook.close()
-                result["completed"].append("写入工作簿")
+                result["completed"].append("工作簿写入已在上次完成" if skip_write else "写入工作簿")
                 self.progress("正在应用字体并通过 Excel 重算…")
                 self.excel.apply(self.engine_dir / "apply_mixed_fonts_excel.ps1", preview.workbook)
                 result["completed"].append("字体与重算")
@@ -268,6 +312,7 @@ class Controller:
                         or verified.get("batch_verification", {}).get("status") != "passed"):
                     raise ValueError("逐分金额验证失败，请查看异常和实际已执行步骤")
                 result["completed"].append("逐分验证")
+                self._pending_path(preview.pdf_dir, preview.workbook).unlink()
                 result["status"] = "completed"
                 result["blank_rows_removed"] = preview.blank_rows_to_remove
             except Exception as exc:
