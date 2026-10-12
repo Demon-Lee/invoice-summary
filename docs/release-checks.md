@@ -21,3 +21,15 @@
 ## 按需运行诊断
 
 程序提供 `--diagnose OUTPUT.json`、`--smoke-gui OUTPUT.json` 和 `--pipeline-smoke PDF --output OUTPUT.json`。完整流程诊断使用临时副本，不修改源 PDF。诊断报告不要放入软件发布目录。
+
+## 0.1.1：规则随软件文件夹分发
+
+这一版调整了规则存储位置。同步／导入／回退使用软件所在目录中的 `recognition`；整包复制即携带当前选中的规则。个人 skill 路径绑定和业务恢复记录保留在本机 AppData，按软件目录隔离。接收方不会自动绑定本机旧 skill，旧 AppData 的规则不会覆盖随包规则。
+
+构建准备阶段会保留维护者现有便携规则；本次从旧 AppData 规则库保留已经使用的兼容版本。未改变识别算法、写表逻辑或业务输入。
+
+0.1.1 的 Windows 目录版已构建成功，只读代码复审未发现主要问题。已将新版放入 `D:\Workspace\发票专题\invoice-desktop\release\InvoiceSummary`，原目录保留为 `InvoiceSummary-0.1.0-archive`。发布目录包含 EXE、`_internal`、`recognition`、使用说明和依赖许可，当前选中的识别版本为 `42334e9f238e`。
+
+已从上述发布目录生成 `发票汇总助手-0.1.1-Windows.zip`，同时提供对应源码包；`release/SHA256.json` 记录两个压缩包的校验值。
+
+本次用户要求修改和打包，未要求测试，因此没有新增或运行测试。发布证据限于构建结果、包内文件检查和只读代码复审；0.1.0 的既有测试结果不能视为本次改动后的运行验证。

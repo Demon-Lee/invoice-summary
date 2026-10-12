@@ -1,5 +1,6 @@
 """Package the built directory and Git-tracked sources without business data."""
 import hashlib
+import argparse
 import json
 import subprocess
 import sys
@@ -12,7 +13,10 @@ from invoice_desktop import __version__
 
 release = root / "release"
 release.mkdir(exist_ok=True)
-distribution = root / "dist/InvoiceSummary"
+parser = argparse.ArgumentParser()
+parser.add_argument("--directory", type=Path, default=root / "dist/InvoiceSummary")
+arguments = parser.parse_args()
+distribution = arguments.directory.resolve()
 if not (distribution / "InvoiceSummary.exe").is_file():
     raise SystemExit("Build the Windows application first")
 outputs = []

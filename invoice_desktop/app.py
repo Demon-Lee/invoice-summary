@@ -1,5 +1,6 @@
 """Native offline UI; background work reports through a main-thread queue."""
 import json
+import hashlib
 import os
 import queue
 import tempfile
@@ -9,7 +10,7 @@ from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 
 from . import __version__
-from .controller import Controller, resource_root
+from .controller import Controller, resource_root, application_root
 from .updates import EngineStore, export_update, read_manifest
 
 HELP = """1. 选择包含完整批次发票的文件夹，以及需要更新的 .xlsx 工作簿。
@@ -24,18 +25,25 @@ HELP = """1. 选择包含完整批次发票的文件夹，以及需要更新的 
 
 识别依据与 skill 相同：从 PDF 内容读取字段，合并规定的折扣与运费，保留重复明细，空数量按 1，金额逐分核对。当前不支持扫描图片 OCR。
 
-规则更新：在“规则与更新”中绑定可信的 summarize-invoice-pdfs 文件夹，点击“同步本机 skill”。其他电脑可导入离线 ZIP 更新包。处理时固定使用界面显示的识别版本。
+规则更新：在“规则与更新”中选择可信的 summarize-invoice-pdfs 文件夹，点击“同步本机 skill”。同步成功后，新规则保存在软件文件夹里的 recognition 目录。关闭软件，把整个软件文件夹打包发给别人，对方完整解压后直接运行即可使用随包规则。请一并保留 _internal 和 recognition 两个文件夹。
+
+同步规则需要软件文件夹可写。你的本机 skill 路径绑定仅保存在本机；接收方无需绑定 skill 或导入规则包。仍可单独导出、导入离线更新包。处理时固定使用界面显示的识别版本。
 
 只修改 SKILL.md 文字不会自动改进算法：需要同时更新对应脚本和测试。写表原则变化或新增依赖可能要求升级主程序。更新前请由 skill 维护者运行其测试。
 """
 
 
 class App:
-    def __init__(self, root, state_dir=None):
+    def __init__(self, root, state_dir=None, application_dir=None):
         self.root = root
-        self.state_dir = Path(state_dir or Path(os.environ.get("LOCALAPPDATA", str(Path.home()))) / "InvoiceSummary")
+        self.application_dir = Path(application_dir or application_root()).resolve()
+        identity = hashlib.sha256(str(self.application_dir).casefold().encode("utf-8")).hexdigest()[:16]
+        self.state_dir = Path(state_dir or Path(os.environ.get("LOCALAPPDATA", str(Path.home()))) / "InvoiceSummary/instances" / identity)
         self.state_dir.mkdir(parents=True, exist_ok=True)
-        self.store = EngineStore(self.state_dir / "recognition", resource_root() / "engine")
+        try:
+            self.store = EngineStore(self.application_dir / "recognition", resource_root() / "engine")
+        except PermissionError as exc:
+            raise ValueError(f"软件文件夹不可写，请完整解压到可写的文件夹后运行：{self.application_dir}") from exc
         self.events = queue.Queue()
         self.busy = False
         self.preview_result = None
@@ -49,11 +57,15 @@ class App:
         self.version = tk.StringVar()
         self.source_status = tk.StringVar()
         settings = self.state_dir / "settings.json"
-        default = Path.home() / ".agents/skills/summarize-invoice-pdfs"
         try:
-            source = json.loads(settings.read_text(encoding="utf-8")).get("skill_source", "")
+            saved = json.loads(settings.read_text(encoding="utf-8"))
+            if not isinstance(saved, dict):
+                raise ValueError("设置格式无效")
+            source = saved.get("skill_source", "") if saved.get("recognition_version") == self.store.version() else ""
+            if not isinstance(source, str):
+                source = ""
         except (OSError, ValueError):
-            source = str(default) if default.is_dir() else ""
+            source = ""
         self.source = tk.StringVar(value=source)
         self._build()
         self.pdf.trace_add("write", self._invalidate)
@@ -139,7 +151,8 @@ class App:
         self.progress_bar = ttk.Progressbar(outer, mode="indeterminate")
         self.progress_bar.pack(fill="x")
         ttk.Label(rules, textvariable=self.version, font=("Microsoft YaHei UI", 12, "bold")).pack(anchor="w", pady=(0, 10))
-        ttk.Label(rules, text="绑定本机 skill 后，预览前会检查更新。同步只影响后续处理，正在运行的任务固定使用原版本。", wraplength=950).pack(anchor="w")
+        ttk.Label(rules, text="同步成功后关闭软件，打包整个软件文件夹即可分发；接收方解压后直接运行。绑定本机 skill 后，预览前会检查更新。", wraplength=950).pack(anchor="w")
+        ttk.Label(rules, text=f"软件文件夹：{self.application_dir}", wraplength=950).pack(anchor="w", pady=(6, 0))
         source_row = ttk.Frame(rules)
         source_row.pack(fill="x", pady=10)
         entry = ttk.Entry(source_row, textvariable=self.source)
@@ -148,7 +161,7 @@ class App:
         self._button(source_row, "选择 skill", self._pick_source).pack(side="left", padx=(8, 0))
         source_buttons = ttk.Frame(rules)
         source_buttons.pack(anchor="w", pady=5)
-        for label, action in (("同步本机 skill", self._sync), ("导出离线更新包", self._export), ("导入更新包", self._import), ("回退版本", self._rollback), ("解除绑定", self._unbind)):
+        for label, action in (("同步本机 skill", self._sync), ("打开软件文件夹", lambda: self._open(self.application_dir)), ("导出离线更新包", self._export), ("导入更新包", self._import), ("回退版本", self._rollback), ("解除绑定", self._unbind)):
             self._button(source_buttons, label, action).pack(side="left", padx=(0, 6))
         ttk.Label(rules, textvariable=self.source_status, wraplength=950).pack(anchor="w", pady=10)
         ttk.Label(rules, text="当前识别版本的 skill 规则").pack(anchor="w", pady=(6, 5))
@@ -188,13 +201,16 @@ class App:
 
     def _source_changed(self, *_):
         self._invalidate()
-        (self.state_dir / "settings.json").write_text(json.dumps({"skill_source": self.source.get()}, ensure_ascii=False), encoding="utf-8")
+        self._save_settings()
         self._check_source()
+
+    def _save_settings(self):
+        (self.state_dir / "settings.json").write_text(json.dumps({"skill_source": self.source.get(), "recognition_version": self.store.version()}, ensure_ascii=False), encoding="utf-8")
 
     def _check_source(self):
         source = self.source.get().strip()
         if not source:
-            self.source_status.set("使用当前版本的离线快照，可绑定本机 skill 或导入更新包。")
+            self.source_status.set("使用随软件文件夹携带的识别规则；需要维护规则时可选择本机 skill。")
             return None
         try:
             status = self.store.source_status(source)
@@ -335,13 +351,26 @@ class App:
         if not source:
             messagebox.showinfo("选择来源", "请先选择本机 skill 文件夹")
             return
-        self._run(lambda: self.store.sync(source), self._updated)
+        def work():
+            try:
+                return self.store.sync(source)
+            except PermissionError as exc:
+                raise ValueError(f"同步未完成，软件文件夹不可写：{self.application_dir}。请将整个软件文件夹放到可写位置后重新同步。") from exc
+        self._run(work, self._updated)
 
     def _updated(self, result):
+        if self.source.get():
+            try:
+                source_status = self.store.source_status(self.source.get())
+                if source_status["changed"] or source_status["error"]:
+                    self.source.set("")
+            except (OSError, ValueError):
+                self.source.set("")
+        self._save_settings()
         self._invalidate()
         self._refresh_version()
         self.status.set("识别版本已更新：" + result["version"])
-        messagebox.showinfo("更新完成", "已更新识别版本：" + result["version"] + "\n修改文件：" + "、".join(result.get("changed", [])))
+        messagebox.showinfo("更新完成", "已更新识别版本：" + result["version"] + "\n修改文件：" + "、".join(result.get("changed", [])) + f"\n\n规则已保存到软件文件夹：{self.application_dir}\n关闭软件后，可把整个文件夹打包分发。")
 
     def _export(self):
         source = self.source.get().strip()

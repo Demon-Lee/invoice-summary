@@ -10,8 +10,8 @@ from pathlib import Path
 import pdfplumber
 import openpyxl
 from invoice_desktop import __version__
-from invoice_desktop.controller import resource_root
-from invoice_desktop.updates import read_manifest
+from invoice_desktop.controller import resource_root, application_root
+from invoice_desktop.updates import read_manifest, EngineStore
 
 
 def main():
@@ -24,18 +24,20 @@ def main():
     output = args.diagnose or args.smoke_gui or args.output
     if output and Path(output).suffix.lower() != ".json":
         raise ValueError("诊断输出仅支持独立的 .json 文件")
+    if args.pipeline_smoke or args.diagnose:
+        engine_dir = EngineStore(application_root() / "recognition", resource_root() / "engine").active()
     if args.pipeline_smoke:
         if not args.output or Path(args.output).resolve() == Path(args.pipeline_smoke).resolve():
             raise ValueError("流程诊断需要独立的 --output JSON 路径")
         from invoice_desktop.diagnostics import pipeline_smoke
-        data = pipeline_smoke(args.pipeline_smoke, resource_root() / "engine")
+        data = pipeline_smoke(args.pipeline_smoke, engine_dir)
     elif args.diagnose:
         import tkinter
         from invoice_desktop.diagnostics import update_smoke
-        data = {"software_version": __version__, "engine_version": read_manifest(resource_root() / "engine")["version"],
+        data = {"software_version": __version__, "engine_version": read_manifest(engine_dir)["version"],
                 "pdfplumber": pdfplumber.__version__, "openpyxl": openpyxl.__version__, "tkinter": tkinter.TkVersion,
                 "resources": all((resource_root() / "resources" / name).exists() for name in ("check_excel.ps1", "run_excel.ps1")),
-                "offline_update": update_smoke(resource_root() / "engine")}
+                "offline_update": update_smoke(engine_dir)}
     else:
         import tkinter as tk
         from invoice_desktop.app import App
@@ -47,7 +49,7 @@ def main():
         if args.smoke_gui:
             root.withdraw()
             with tempfile.TemporaryDirectory(prefix="invoice-ui-check-") as tmp:
-                application = App(root, tmp)
+                application = App(root, state_dir=Path(tmp) / "state", application_dir=Path(tmp) / "application")
                 root.update_idletasks()
                 data = {"status": "started", "title": root.title(), "engine_version": application.store.version(), "execute_disabled": str(application.execute.cget("state")) == "disabled"}
                 root.destroy()

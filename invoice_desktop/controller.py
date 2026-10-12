@@ -22,6 +22,11 @@ def resource_root():
     return Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parents[1]))
 
 
+def application_root():
+    """The directory users copy, independent of cwd and _internal resources."""
+    return Path(sys.executable).resolve().parent if getattr(sys, "frozen", False) else Path(__file__).resolve().parents[1]
+
+
 def load_engine(directory, name):
     path = Path(directory) / name
     spec = importlib.util.spec_from_file_location("invoice_skill_" + sha256(path)[:12], path)
