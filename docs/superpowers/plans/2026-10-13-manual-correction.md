@@ -44,5 +44,5 @@ Files: `invoice_desktop/__init__.py`, `使用说明.txt`, `README.md`, `docs/rel
 - [x] Bump version to 0.1.3, document selecting a row, editing, rechecking and executing. State the current-preview scope, existing-row authorization limits and structural errors requiring skill improvement.
 - [x] Obtain read-only independent code review and fix substantive findings; no GUI launch, diagnostics or tests.
 - [x] Build with existing `tools/build.ps1`, retaining active recognition rules. Check selected rule version and required files.
-- [ ] Safely archive current release as InvoiceSummary-0.1.2-archive and publish the new directory, after exact path and running-process checks.
-- [ ] Commit and package from `release/InvoiceSummary`, documenting the unperformed runtime checks.
+- [x] Publish the new directory after exact path and running-process checks. On resuming after the user closed the application, the old release directory was absent; the existing 0.1.2 Windows ZIP remains available, and 0.1.3 was placed at `release/InvoiceSummary`.
+- [x] Commit and package from `release/InvoiceSummary`, documenting the unperformed runtime checks.
