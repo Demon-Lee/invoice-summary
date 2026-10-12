@@ -1,5 +1,6 @@
 """Template-preserving workbook planning and staged in-place writes."""
 import datetime
+import math
 import os
 import re
 import tempfile
@@ -38,6 +39,18 @@ def number(value, label, cents=False):
     if not result.is_finite() or (cents and result != result.quantize(Decimal("0.01"))):
         raise ValueError(f"{label}必须为有效的逐分金额")
     return result
+
+
+def _excel_number(value, label, exact=False):
+    try:
+        result = float(value)
+        if not math.isfinite(result) or (value != 0 and result == 0):
+            raise ValueError(f"{label}超出 Excel 可用数字范围")
+        if exact and (Decimal(str(result)) != value or len("".join(map(str, value.as_tuple().digits)).rstrip("0")) > 15):
+            raise ValueError(f"{label}超出 Excel 可准确保存的数字精度（最多 15 位有效数字）")
+        return result
+    except (OverflowError, InvalidOperation) as exc:
+        raise ValueError(f"{label}超出 Excel 可用数字范围") from exc
 
 
 def inspect_sheet(ws):
@@ -89,6 +102,9 @@ def _rows(payload):
             if row["quantity"] == 0:
                 raise ValueError("数量不能为零")
             row["amount"] = number(row["amount"], "金额", cents=True)
+            _excel_number(row["quantity"], "数量", exact=True)
+            _excel_number(row["amount"], "金额", exact=True)
+            _excel_number(row["amount"] / row["quantity"], "单价")
             for key in ("product_name", "spec", "unit", "manufacturer"):
                 row[key] = text(row[key])
             if not row["manufacturer"]:
@@ -190,9 +206,10 @@ class WorkbookPlan:
     blank_rows_to_remove: dict
     total: Decimal
     sheet_details: dict
+    rows_to_correct: int = 0
 
 
-def plan_workbook(path, payload, run_date=None):
+def plan_workbook(path, payload, run_date=None, original_payload=None, corrected_workbook=False):
     path = Path(path).resolve()
     if path.suffix.lower() != ".xlsx" or not path.is_file():
         raise ValueError("请选择现有的 .xlsx 工作簿")
@@ -207,9 +224,24 @@ def plan_workbook(path, payload, run_date=None):
         if missing:
             raise ValueError("缺少工作表：" + "、".join(sorted(missing)))
         rows = _rows(payload)
+        before_rows = {}
+        if original_payload is not None:
+            originals = [raw for record in original_payload.get("records", []) for raw in record.get("rows", [])]
+            if len(originals) != len(rows):
+                raise ValueError("人工校正不能改变明细条数")
+            for index, (raw, expected) in enumerate(zip(originals, rows)):
+                if number(raw.get("sequence"), "原始序号") != expected["sequence"]:
+                    raise ValueError("人工校正不能改变发票序号")
+                try:
+                    before = {key: text(raw.get(key)) for key in ("product_name", "spec", "unit", "manufacturer")}
+                    before.update(sequence=expected["sequence"], quantity=number(raw.get("quantity") if text(raw.get("quantity")) else 1, "原始数量"), amount=number(raw.get("amount"), "原始金额", cents=True))
+                except ValueError:
+                    continue
+                if before != expected:
+                    before_rows[index] = before
         day = run_date or datetime.date.today()
         date_text = f"{day.year}.{day.month}.{day.day}"
-        removed, details, added_counts = {}, {}, []
+        removed, details, added_counts, correction_counts = {}, {}, [], []
         formulas = [(ws.title, c.row, c.column, c.value) for ws in wb for row in ws for c in row if c.data_type == "f"]
         row_maps, regenerated = {}, set()
         for name in SIGNERS:
@@ -226,6 +258,7 @@ def plan_workbook(path, payload, run_date=None):
             last_content = header
             destinations = {}
             metadata = {}
+            corrected_count = 0
             for r in range(header+1, footer):
                 if _populated(ws, r):
                     last_content = r
@@ -233,17 +266,31 @@ def plan_workbook(path, payload, run_date=None):
                     continue
                 existing = _existing(ws, columns, r)
                 candidate = desired[_key(existing)]
-                if not candidate:
-                    raise ValueError(f"{name} 第 {r} 行与完整 PDF 目录存在冲突：已有明细未找到对应发票")
-                index = candidate.popleft()
+                if original_payload is None:
+                    if not candidate:
+                        raise ValueError(f"{name} 第 {r} 行与完整 PDF 目录存在冲突：已有明细未找到对应发票")
+                    index = candidate.popleft()
+                else:
+                    candidates = sorted(set(candidate) | {i for i, before in before_rows.items() if _key(before) == _key(existing)})
+                    before_matching = [i for i in candidates if i not in matched and all(existing[key] == before_rows.get(i, rows[i])[key] for key in existing)]
+                    after_matching = [i for i in candidates if i not in matched and all(existing[key] == rows[i][key] for key in existing)]
+                    matching = (after_matching or before_matching) if corrected_workbook else (before_matching or after_matching)
+                    if not matching:
+                        raise ValueError(f"{name} 第 {r} 行与原识别值和校正值均不一致，未执行覆盖")
+                    if len(matching) > 1 and any(any(rows[i][key] != rows[matching[0]][key] for key in existing) for i in matching[1:]):
+                        raise ValueError(f"{name} 第 {r} 行有多个不同的校正目标，无法唯一对应明细")
+                    index = matching[0]
                 expected = rows[index]
                 if any(existing[key] != expected[key] for key in existing):
-                    raise ValueError(f"{name} 第 {r} 行与发票业务字段冲突，未执行覆盖")
+                    if index not in before_rows or any(existing[key] != before_rows[index][key] for key in existing):
+                        raise ValueError(f"{name} 第 {r} 行与发票业务字段冲突，未执行覆盖")
+                    corrected_count += 1
                 matched.add(index)
                 destinations[index] = r
                 metadata[index] = ([tuple((copy(c.value), copy(c._style), copy(c.hyperlink), copy(c.comment), c.data_type)) for c in ws[r]], copy(ws.row_dimensions[r]))
             new = [index for index in range(len(rows)) if index not in matched]
             added_counts.append(len(new))
+            correction_counts.append(corrected_count)
             expansion = max(0, len(new) - (footer-last_content-1))
             _shift_rows(ws, footer, expansion)
             footer += expansion
@@ -278,10 +325,10 @@ def plan_workbook(path, payload, run_date=None):
                         if col <= len(template_styles):
                             cell._style = copy(template_styles[col-1])
                 values = {"序号": row["sequence"], "产品名称": row["product_name"], "规格型号": row["spec"],
-                          "单位": row["unit"], "数量": float(row["quantity"]), "金额": float(row["amount"]),
+                          "单位": row["unit"], "数量": _excel_number(row["quantity"], "数量", exact=True), "金额": _excel_number(row["amount"], "金额", exact=True),
                           "生产厂家": row["manufacturer"]}
                 values["单价"] = (f"={get_column_letter(columns['金额'])}{r}/{get_column_letter(columns['数量'])}{r}"
-                                if name == "验收" else float(row["amount"] / row["quantity"]))
+                                if name == "验收" else _excel_number(row["amount"] / row["quantity"], "单价"))
                 for label, col in columns.items():
                     cell = ws.cell(r, col, values[label])
                     if label in ("产品名称", "规格型号", "单位", "生产厂家"):
@@ -308,7 +355,7 @@ def plan_workbook(path, payload, run_date=None):
                 letter = get_column_letter(columns[label])
                 ws.cell(footer, columns[label], f"=SUM({letter}{header+1}:{letter}{footer-1})" if footer > header+1 else "=0")
             ws.cell(footer+1, date_col, date_text)
-            details[name] = {"headerRow": header, "footerRow": footer, "columns": columns, "rowsToAdd": len(new), "blankRowsToRemove": count}
+            details[name] = {"headerRow": header, "footerRow": footer, "columns": columns, "rowsToAdd": len(new), "rowsToCorrect": corrected_count, "blankRowsToRemove": count}
             inspect_sheet(ws)
         moved = any(old != new for mapping in row_maps.values() for old, new in mapping.items())
         if moved:
@@ -322,7 +369,7 @@ def plan_workbook(path, payload, run_date=None):
                     raise ValueError(f"{name} 公式无法安全随行移动")
                 wb[name].cell(target_row, col, _remap_formula(formula, name, row_maps))
         wb.calculation = CalcProperties(calcId=0, fullCalcOnLoad=True, forceFullCalc=True)
-        return WorkbookPlan(path, wb, max(added_counts), removed, sum((r["amount"] for r in rows), Decimal("0.00")), details)
+        return WorkbookPlan(path, wb, max(added_counts), removed, sum((r["amount"] for r in rows), Decimal("0.00")), details, max(correction_counts))
     except Exception:
         wb.close()
         raise

@@ -1,5 +1,6 @@
 """Read-only preview and guarded execution of one pinned skill engine."""
 import contextlib
+import copy
 import ctypes
 import importlib.util
 import io
@@ -16,6 +17,7 @@ from pathlib import Path
 
 from .updates import read_manifest, sha256
 from .workbook import plan_workbook, write_workbook, number
+from .corrections import apply_corrections, row_changes
 
 
 def resource_root():
@@ -84,6 +86,12 @@ class Preview:
     sheet_details: dict = field(default_factory=dict)
     total: str = "0.00"
     resume_pending: bool = False
+    original_payload: dict = field(default_factory=dict)
+    corrections: dict = field(default_factory=dict)
+    base_issues: list = field(default_factory=list)
+    rows_to_correct: int = 0
+    workbook_written: bool = False
+    manual_phase_uncertain: bool = False
 
     @property
     def clean(self):
@@ -91,7 +99,7 @@ class Preview:
 
     @property
     def has_changes(self):
-        return self.resume_pending or self.rows_to_add > 0 or any(self.blank_rows_to_remove.values()) or any(e.get("status") == "ready" for e in self.payload.get("rename_plan", []))
+        return self.resume_pending or self.rows_to_add > 0 or self.rows_to_correct > 0 or any(self.blank_rows_to_remove.values()) or any(e.get("status") == "ready" for e in self.payload.get("rename_plan", []))
 
 
 class Controller:
@@ -120,6 +128,13 @@ class Controller:
             "workbook_written": False}
         if workbook_written is not None:
             state["workbook_written"] = workbook_written
+        if preview.corrections and "manual" not in state:
+            destinations = {p["source"]: p["destination"] for p in preview.payload["rename_plan"]}
+            state["manual"] = {
+                "changes": preview.corrections,
+                "workbook_before_sha256": preview.fingerprints[str(preview.workbook)],
+                "invoices": [{"source": r["pdf"], "destination": destinations[r["pdf"]], "sha256": preview.fingerprints[r["pdf"]], "sequence": r["sequence"], "row_count": len(r["rows"])} for r in preview.original_payload["records"]],
+            }
         try:
             staged.write_text(json.dumps(state, indent=2), encoding="utf-8")
             os.replace(staged, path)
@@ -190,76 +205,149 @@ class Controller:
         with self._scratch() as scratch:
             report = scratch / "preview.json"
             data = self._invoke("pipeline", ["preview", "--pdf-dir", str(directory), "--report", str(report)], report)
-            result = Preview(directory, book, self.engine_dir, manifest["version"], data, before)
+            result = Preview(directory, book, self.engine_dir, manifest["version"], data, before, original_payload=copy.deepcopy(data))
             pending = self._pending_path(directory, book)
             if pending.exists():
                 result.resume_pending = True
                 try:
                     state = json.loads(pending.read_text(encoding="utf-8"))
+                    result.workbook_written = state.get("workbook_written", False)
+                    if not isinstance(result.workbook_written, bool):
+                        raise ValueError("写表阶段记录无效")
                     if state["engine_version"] != result.engine_version:
-                        result.issues.append("上次处理未完成，请先回退到原识别版本再继续处理")
+                        result.base_issues.append("上次处理未完成，请先回退到原识别版本再继续处理")
                     if state["invoice_hashes"] != self._invoice_hashes(before, book):
-                        result.issues.append("上次处理未完成且发票内容或批次已变化，请恢复原批次后继续")
-                except (OSError, ValueError, KeyError) as exc:
-                    result.issues.append("未完成处理记录无法读取：" + str(exc))
-            for item in data.get("exceptions", []):
-                result.issues.append(f"{Path(item.get('pdf', '')).name} · {item.get('field', '')}：{item.get('message', '')}")
-            records = data.get("records", [])
-            plan = data.get("rename_plan", [])
-            if not records:
-                result.issues.append("没有可处理的发票")
-            if len(plan) != len(records):
-                result.issues.append("发票与改名计划不对应，识别接口需要适配")
-            sources, targets = set(), set()
-            for item in plan:
-                source, destination = Path(item["source"]).resolve(), Path(item["destination"]).resolve()
-                if source.parent != directory or destination.parent != directory:
-                    result.issues.append("改名计划超出所选文件夹")
-                if item.get("status") not in ("ready", "unchanged"):
-                    result.issues.append(f"文件重名或改名状态异常：{destination.name}")
-                if str(source).casefold() in sources or str(destination).casefold() in targets:
-                    result.issues.append("改名计划包含重复来源或目标")
-                sources.add(str(source).casefold())
-                targets.add(str(destination).casefold())
-            try:
-                sequences = [r["sequence"] for r in records]
-                if sequences != list(range(1, len(records)+1)):
-                    raise ValueError("发票序号必须从 1 连续且逐票唯一")
-                total = Decimal("0.00")
-                for record in records:
-                    grand = number(record["grand_total"], "发票金额", cents=True)
-                    detail = number(record["detail_total"], "明细金额", cents=True)
-                    row_total = sum((number(r["amount"], "明细金额", cents=True) for r in record.get("rows", [])), Decimal("0.00"))
-                    if not record.get("rows") or grand != detail or grand != row_total:
-                        raise ValueError(f"序号 {record['sequence']} 发票金额与明细金额不一致")
-                    if any(r.get("sequence") != record["sequence"] for r in record["rows"]):
-                        raise ValueError("同一发票的明细序号不一致")
-                    total += grand
-                result.total = format(total, ".2f")
-                self.progress("正在检查工作簿表头、页脚和明细映射…")
-                writer_plan = plan_workbook(book, data)
-                result.rows_to_add = writer_plan.rows_to_add
-                result.blank_rows_to_remove = writer_plan.blank_rows_to_remove
-                result.sheet_details = writer_plan.sheet_details
-                writer_plan.workbook.close()
-                if len(writer_plan.sheet_details) != 2:
-                    result.issues.append("工作簿映射不完整")
-                # The shared font script visits every sheet, so detect this before any write.
-                from openpyxl import load_workbook
-                wb = load_workbook(book, read_only=True)
-                try:
-                    for ws in wb:
-                        if not any(row[0] == "序号" for row in ws.iter_rows(values_only=True)):
-                            result.issues.append(f"{ws.title} 无序号表头，不符合当前 skill 字体处理约定")
-                finally:
-                    wb.close()
-            except (ValueError, KeyError, TypeError) as exc:
-                result.issues.append(str(exc))
-            if before != self._fingerprints(directory, book):
-                result.issues.append("文件在预览过程中发生变化，请重新预览")
+                        result.base_issues.append("上次处理未完成且发票内容或批次已变化，请恢复原批次后继续")
+                    if not result.base_issues and state.get("manual"):
+                        if not result.workbook_written and state["manual"]["workbook_before_sha256"] != before[str(book)]:
+                            result.workbook_written = True
+                            result.manual_phase_uncertain = True
+                        self._restore_manual(result, state["manual"])
+                        self._rebuild_rename(result)
+                except (OSError, ValueError, KeyError, TypeError) as exc:
+                    result.base_issues.append("未完成处理记录无法读取：" + str(exc))
+            self._validate_preview(result)
         if self.cleanup_error:
-            result.issues.append("临时文件清理未完成：" + self.cleanup_error)
+            issue = "临时文件清理未完成：" + self.cleanup_error
+            result.base_issues.append(issue)
+            result.issues.append(issue)
         self.progress("预览结束：" + ("可处理" if result.clean else "存在待解决异常"))
+        return result
+
+    def _restore_manual(self, preview, saved):
+        bindings = saved["invoices"]
+        records = preview.original_payload.get("records", [])
+        if len(bindings) != len(records) or [r["sequence"] for r in bindings] != list(range(1, len(records)+1)):
+            raise ValueError("未完成人工校正的发票条数或顺序不一致")
+        restored, used = [], set()
+        for binding in bindings:
+            paths = {str(Path(binding[key]).resolve()) for key in ("source", "destination")}
+            matches = [i for i, r in enumerate(records) if i not in used and str(Path(r["pdf"]).resolve()) in paths and preview.fingerprints.get(r["pdf"]) == binding["sha256"]]
+            if len(matches) != 1:
+                raise ValueError("无法唯一对应未完成人工校正的原始发票")
+            index = matches[0]
+            used.add(index)
+            record = copy.deepcopy(records[index])
+            if len(record["rows"]) != binding["row_count"]:
+                raise ValueError("人工校正恢复时明细条数发生变化，请先改进识别")
+            record["sequence"] = binding["sequence"]
+            for row in record["rows"]:
+                row["sequence"] = record["sequence"]
+            restored.append(record)
+        preview.original_payload["records"] = restored
+        preview.corrections = copy.deepcopy(saved["changes"])
+        preview.payload = apply_corrections(preview.original_payload, preview.corrections)
+
+    def _rebuild_rename(self, preview):
+        with self._scratch() as scratch:
+            records, report = scratch / "corrected.json", scratch / "rename-preview.json"
+            records.write_text(json.dumps(preview.payload, ensure_ascii=False), encoding="utf-8")
+            renamed = self._invoke("pipeline", ["rename", "--records", str(records), "--report", str(report)], report)
+            preview.payload["rename_plan"] = renamed["rename_plan"]
+        if self.cleanup_error:
+            preview.base_issues.append("临时文件清理未完成：" + self.cleanup_error)
+
+    def _validate_preview(self, result):
+        result.issues = list(result.base_issues)
+        result.rows_to_add = result.rows_to_correct = 0
+        result.blank_rows_to_remove, result.sheet_details = {}, {}
+        result.total = "0.00"
+        data = result.payload
+        for item in data.get("exceptions", []):
+            result.issues.append(f"{Path(item.get('pdf', '')).name} · {item.get('field', '')}：{item.get('message', '')}")
+        records, plan = data.get("records", []), data.get("rename_plan", [])
+        if not records:
+            result.issues.append("没有可处理的发票")
+        if len(plan) != len(records):
+            result.issues.append("发票与改名计划不对应，识别接口需要适配")
+        sources, targets = set(), set()
+        for item in plan:
+            source, destination = Path(item["source"]).resolve(), Path(item["destination"]).resolve()
+            if source.parent != result.pdf_dir or destination.parent != result.pdf_dir:
+                result.issues.append("改名计划超出所选文件夹")
+            if item.get("status") not in ("ready", "unchanged"):
+                result.issues.append(f"文件重名或改名状态异常：{destination.name}")
+            if str(source).casefold() in sources or str(destination).casefold() in targets:
+                result.issues.append("改名计划包含重复来源或目标")
+            sources.add(str(source).casefold())
+            targets.add(str(destination).casefold())
+        try:
+            if [r["sequence"] for r in records] != list(range(1, len(records)+1)):
+                raise ValueError("发票序号必须从 1 连续且逐票唯一")
+            total = sum((number(r["grand_total"], "发票金额", cents=True) for r in records), Decimal("0.00"))
+            result.total = format(total, ".2f")
+            for record in records:
+                grand = number(record["grand_total"], "发票金额", cents=True)
+                detail = number(record["detail_total"], "明细金额", cents=True)
+                row_total = sum((number(r["amount"], "明细金额", cents=True) for r in record.get("rows", [])), Decimal("0.00"))
+                if not record.get("rows") or grand != detail or grand != row_total:
+                    raise ValueError(f"序号 {record['sequence']} 发票金额与明细金额不一致；漏项请改进 skill，字段错误可人工校正")
+                if any(r.get("sequence") != record["sequence"] for r in record["rows"]):
+                    raise ValueError("同一发票的明细序号不一致")
+            self.progress("正在检查工作簿表头、页脚和明细映射…")
+            writer_plan = plan_workbook(result.workbook, data, original_payload=result.original_payload if result.corrections else None, corrected_workbook=result.workbook_written)
+            result.rows_to_add, result.rows_to_correct = writer_plan.rows_to_add, writer_plan.rows_to_correct
+            result.blank_rows_to_remove, result.sheet_details = writer_plan.blank_rows_to_remove, writer_plan.sheet_details
+            writer_plan.workbook.close()
+            if result.manual_phase_uncertain and (result.rows_to_add or result.rows_to_correct):
+                result.issues.append("工作簿已变化但写表完成记录缺失，业务明细未完整对应校正结果；请核实并恢复原工作簿后重试")
+            if len(result.sheet_details) != 2:
+                result.issues.append("工作簿映射不完整")
+            from openpyxl import load_workbook
+            wb = load_workbook(result.workbook, read_only=True)
+            try:
+                for ws in wb:
+                    if not any(row[0] == "序号" for row in ws.iter_rows(values_only=True)):
+                        result.issues.append(f"{ws.title} 无序号表头，不符合当前 skill 字体处理约定")
+            finally:
+                wb.close()
+        except (ValueError, KeyError, TypeError) as exc:
+            result.issues.append(str(exc))
+        if result.fingerprints != self._fingerprints(result.pdf_dir, result.workbook):
+            result.issues.append("文件在预览过程中发生变化，请重新预览")
+
+    def correct(self, preview, record_index, row_index, values=None):
+        if preview.resume_pending:
+            raise ValueError("请先完成上次处理；恢复期间固定使用已保存的人工校正")
+        if preview.engine_dir != self.engine_dir or read_manifest(self.engine_dir)["version"] != preview.engine_version:
+            raise ValueError("识别版本发生变化，请重新预览")
+        if preview.fingerprints != self._fingerprints(preview.pdf_dir, preview.workbook):
+            raise ValueError("预览后输入文件或目录发生变化，请重新预览")
+        result = copy.deepcopy(preview)
+        try:
+            original_row = result.original_payload["records"][record_index]["rows"][row_index]
+        except (KeyError, IndexError, TypeError) as exc:
+            raise ValueError("请选择有效的预览明细") from exc
+        key = f"{record_index}:{row_index}"
+        changes = row_changes(original_row, values) if values is not None else {}
+        if changes:
+            result.corrections[key] = changes
+        else:
+            result.corrections.pop(key, None)
+        result.payload = apply_corrections(result.original_payload, result.corrections)
+        self.progress("正在检查人工校正后的金额、文件名和工作簿映射…")
+        self._rebuild_rename(result)
+        self._validate_preview(result)
         return result
 
     def apply(self, preview):
@@ -275,13 +363,13 @@ class Controller:
         self.excel.check(preview.workbook)
         pending_state = self._save_pending(preview)
         skip_write = (preview.resume_pending and pending_state.get("workbook_written")
-                      and not preview.rows_to_add and not any(preview.blank_rows_to_remove.values()))
-        result = dict(status="failed", completed=[], total=preview.total, payload=preview.payload, engine_version=preview.engine_version)
+                      and not preview.rows_to_add and not preview.rows_to_correct and not any(preview.blank_rows_to_remove.values()))
+        result = dict(status="failed", completed=[], total=preview.total, payload=preview.payload, engine_version=preview.engine_version, corrections=preview.corrections, original_payload=preview.original_payload)
         with self._scratch() as scratch:
             try:
                 records = scratch / "preview.json"
                 records.write_text(json.dumps(preview.payload, ensure_ascii=False), encoding="utf-8")
-                writer_plan = plan_workbook(preview.workbook, preview.payload)
+                writer_plan = plan_workbook(preview.workbook, preview.payload, original_payload=preview.original_payload if preview.corrections else None, corrected_workbook=preview.workbook_written)
                 if preview.fingerprints != self._fingerprints(preview.pdf_dir, preview.workbook):
                     writer_plan.workbook.close()
                     raise ValueError("执行前文件再次发生变化，请重新预览")

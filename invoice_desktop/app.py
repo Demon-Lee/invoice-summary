@@ -7,15 +7,17 @@ import tempfile
 import threading
 import tkinter as tk
 from pathlib import Path
+from decimal import Decimal, InvalidOperation
 from tkinter import filedialog, messagebox, ttk
 
 from . import __version__
 from .controller import Controller, resource_root, application_root
 from .updates import EngineStore, export_update, read_manifest
+from .corrections import FIELDS, LABELS, field_value, normalize
 
 EXECUTION_STEPS = (
     "1. 选择完整批次的 PDF 文件夹和目标 .xlsx 工作簿。",
-    "2. 点击“只读预览”，核对文件名、明细、金额和异常。",
+    "2. 点击“只读预览”；字段有误可双击明细人工校正。",
     "3. 预览通过后点击“执行处理”，等待完成。",
     "4. 查看金额复核结果和临时文件清理状态。",
 )
@@ -26,8 +28,15 @@ NECESSARY_CONDITIONS = (
     "执行前关闭目标工作簿；软件和输入文件所在目录须可写。",
 )
 PROCESS_NOTICE = "执行会重命名 PDF，并直接更新原工作簿；不自动创建备份。"
-HELP_HEADINGS = ("执行步骤", "必要条件", "工作簿详细要求", "处理与恢复", "识别原则", "规则更新与分发")
+HELP_HEADINGS = ("执行步骤", "必要条件", "人工校正", "工作簿详细要求", "处理与恢复", "识别原则", "规则更新与分发")
 HELP = "\n".join(("执行步骤", *EXECUTION_STEPS, "", PROCESS_NOTICE, "", "必要条件", *NECESSARY_CONDITIONS)) + """
+
+人工校正
+选中一条预览明细，点击“人工校正”或双击该行。对照原 PDF 校正产品名称、规格型号、单位、数量、含税金额和生产厂家，单价自动计算。保存后重新检查金额、文件名和工作簿映射；通过后才可执行。“恢复识别值”可撤销该行校正。
+
+校正只对本次预览有效，保存时不会改动 PDF、工作簿或 skill。重新发起普通预览会重新识别，需要再次校正。未完成执行的校正会随恢复记录保留，恢复期间固定使用该次校正。
+
+不支持增删明细或修改票面总额。漏项、多项、整票无法解析等结构问题仍需改进 skill。金额始终逐分核对，工作簿中不对应的内容不会被强制覆盖。
 
 工作簿详细要求
 工作簿须包含“验收”“领用”两张表，且各有完整表头、唯一三行页脚（合计、签字、说明）和日期标签。表内已有明细须在所选完整 PDF 批次中找到对应发票。
@@ -154,19 +163,24 @@ class App:
         self.execute = self._button(buttons, "执行处理", self._apply)
         self.execute.pack(side="left", padx=(0, 8))
         self.execute.configure(state="disabled")
+        self.correct_button = self._button(buttons, "人工校正", self._edit_detail)
+        self.correct_button.pack(side="left", padx=(0, 8))
+        self.correct_button.configure(state="disabled")
         self._button(buttons, "打开发票目录", lambda: self._open(self.pdf.get())).pack(side="left", padx=(0, 8))
         self._button(buttons, "打开工作簿", lambda: self._open(self.book.get())).pack(side="left")
         ttk.Label(process, textvariable=self.summary, wraplength=950).grid(row=4, column=0, columnspan=3, sticky="w", pady=(8, 4))
-        ttk.Label(process, text="完整批次明细（已有发票也会显示）").grid(row=5, column=0, columnspan=3, sticky="w", pady=(6, 4))
+        ttk.Label(process, text="完整批次明细 · 双击一行可人工校正 · 校正后重新检查").grid(row=5, column=0, columnspan=3, sticky="w", pady=(6, 4))
         table = ttk.Frame(process)
         table.grid(row=6, column=0, columnspan=3, sticky="nsew")
         table.rowconfigure(0, weight=1)
         table.columnconfigure(0, weight=1)
-        columns = ("sequence", "filename", "spec", "unit", "quantity", "amount")
+        columns = ("sequence", "filename", "product_name", "spec", "unit", "quantity", "price", "amount", "manufacturer", "correction")
         self.tree = ttk.Treeview(table, columns=columns, show="headings")
-        for name, label, width in zip(columns, ("序号", "PDF → 新文件名", "规格型号", "单位", "数量", "含税金额"), (55, 460, 140, 65, 70, 105)):
+        for name, label, width in zip(columns, ("序号", "PDF → 新文件名", "产品名称", "规格型号", "单位", "数量", "单价（自动）", "含税金额", "生产厂家", "人工校正"), (55, 290, 160, 125, 60, 70, 105, 105, 180, 85)):
             self.tree.heading(name, text=label)
-            self.tree.column(name, width=width, minwidth=40, anchor="w" if name in ("filename", "spec") else "center", stretch=name == "filename")
+            self.tree.column(name, width=width, minwidth=40, anchor="w" if name in ("filename", "product_name", "spec", "manufacturer") else "center", stretch=name == "filename")
+        self.tree.tag_configure("corrected", background="#fff4dc")
+        self.tree.bind("<Double-1>", self._edit_detail)
         self.tree.grid(row=0, column=0, sticky="nsew")
         vertical = ttk.Scrollbar(table, orient="vertical", command=self.tree.yview)
         vertical.grid(row=0, column=1, sticky="ns")
@@ -245,6 +259,7 @@ class App:
     def _invalidate(self, *_):
         self.preview_result = None
         self.execute.configure(state="disabled")
+        self.correct_button.configure(state="disabled")
 
     def _source_changed(self, *_):
         self._invalidate()
@@ -312,6 +327,7 @@ class App:
                 for widget in self.interactive:
                     widget.configure(state="normal")
                 self.execute.configure(state="disabled")
+                self.correct_button.configure(state="normal" if self.preview_result and not self.preview_result.resume_pending else "disabled")
                 if event[0] == "done":
                     event[1](event[2])
                 else:
@@ -335,31 +351,128 @@ class App:
 
     def _render_preview(self, preview):
         self.preview_result = preview
-        self._render_table(preview.payload)
+        self._render_table(preview.payload, corrections=preview.corrections)
+        self.correct_button.configure(state="normal" if preview.payload.get("records") and not preview.resume_pending else "disabled")
         invoices = len(preview.payload.get("records", []))
         rows = sum(len(r.get("rows", [])) for r in preview.payload.get("records", []))
-        self.summary.set(f"{invoices} 张发票 · {rows} 条明细 · 本批合计 ¥{preview.total} · 新增明细 {preview.rows_to_add} 条")
+        self.summary.set(f"{invoices} 张发票 · {rows} 条明细 · 本批合计 ¥{preview.total} · 新增 {preview.rows_to_add} 条 · 人工校正 {len(preview.corrections)} 条")
         parts = [f"目标工作簿：{preview.workbook}（原位更新，不自动创建备份）", f"识别版本：{preview.engine_version}"]
         for name, details in preview.sheet_details.items():
             parts.append(f"{name}：表头、字段映射、页脚与日期检查通过；待移除末尾空行 {details['blankRowsToRemove']} 行")
+            if details.get("rowsToCorrect"):
+                parts.append(f"{name}：将按人工校正更新已有明细 {details['rowsToCorrect']} 条。")
+        parts.extend(self._correction_lines(preview.original_payload, preview.corrections))
         parts.append("异常：\n" + "\n".join(preview.issues) if preview.issues else "异常：无；只读预览通过，尚未改动文件。")
         if preview.resume_pending:
             parts.append("检测到上次处理未完成；本次将继续字体、重算和金额验证，缺失的改名或明细也会补齐。")
+            if preview.corrections:
+                parts.append("已恢复上次人工校正；请先完成该次运行，恢复期间不能修改校正。")
         if preview.clean and not preview.has_changes:
             parts.append("没有新增、改名或多余末尾空行，无需处理。")
         self._set_text(self.report, "\n".join(parts))
         if preview.clean and preview.has_changes:
             self.execute.configure(state="normal")
 
-    def _render_table(self, payload, renamed=None):
+    def _render_table(self, payload, renamed=None, corrections=None):
         self.tree.delete(*self.tree.get_children())
         plans = {p["source"]: p for p in (renamed or payload.get("rename_plan", []))}
-        for record in payload.get("records", []):
+        for record_index, record in enumerate(payload.get("records", [])):
             source = record["pdf"]
             destination = plans.get(source, {}).get("destination", source)
             mapping = Path(source).name if source == destination else f"{Path(source).name} → {Path(destination).name}"
-            for row in record.get("rows", []):
-                self.tree.insert("", "end", values=(record["sequence"], mapping, row.get("spec") or "—", row.get("unit") or "—", row.get("quantity") or "1", "¥"+row["amount"]))
+            for row_index, row in enumerate(record.get("rows", [])):
+                key = f"{record_index}:{row_index}"
+                corrected = bool((corrections or {}).get(key))
+                price = self._unit_price(row)
+                self.tree.insert("", "end", iid=key, tags=("corrected",) if corrected else (), values=(record["sequence"], mapping, row.get("product_name") or "—", row.get("spec") or "—", row.get("unit") or "—", field_value(row, "quantity"), price, "¥" + str(row.get("amount", "—")), row.get("manufacturer") or "—", "已校正" if corrected else ""))
+
+    def _unit_price(self, row):
+        try:
+            values = normalize({field: field_value(row, field) for field in ("quantity", "amount")})
+            return format(Decimal(values["amount"]) / Decimal(values["quantity"]), ".6f")
+        except (ValueError, InvalidOperation, ZeroDivisionError):
+            return "—"
+
+    def _correction_lines(self, original, changes):
+        lines = []
+        for key, fields in sorted(changes.items()):
+            record_index, row_index = map(int, key.split(":"))
+            record = original["records"][record_index]
+            row = record["rows"][row_index]
+            detail = "；".join(f"{LABELS[field]}：{field_value(row, field) or '空'} → {value or '空'}" for field, value in fields.items())
+            lines.append(f"人工校正 · 序号 {record['sequence']} 第 {row_index + 1} 条：{detail}")
+        return lines
+
+    def _edit_detail(self, event=None):
+        if self.busy:
+            return
+        preview = self.preview_result
+        if preview is None:
+            messagebox.showinfo("先进行预览", "请先进行只读预览，再选择一条明细进行人工校正。")
+            return
+        if preview.resume_pending:
+            messagebox.showinfo("先完成上次处理", "恢复期间固定使用上次保存的校正，请先完成该次运行。")
+            return
+        if event is not None:
+            if self.tree.identify_region(event.x, event.y) != "cell":
+                return
+            selected = self.tree.identify_row(event.y)
+            if selected:
+                self.tree.selection_set(selected)
+        selected = self.tree.selection()
+        if not selected:
+            messagebox.showinfo("选择明细", "请先选中一条需要校正的明细。")
+            return
+        record_index, row_index = map(int, selected[0].split(":"))
+        record = preview.payload["records"][record_index]
+        original = preview.original_payload["records"][record_index]["rows"][row_index]
+        row = record["rows"][row_index]
+        dialog = tk.Toplevel(self.root)
+        dialog.title(f"人工校正 · 序号 {record['sequence']} 第 {row_index + 1} 条")
+        dialog.transient(self.root)
+        dialog.geometry("860x540")
+        dialog.minsize(720, 500)
+        dialog.grab_set()
+        frame = ttk.Frame(dialog, padding=20)
+        frame.pack(fill="both", expand=True)
+        frame.columnconfigure(2, weight=1)
+        ttk.Label(frame, text=Path(record["pdf"]).name, font=("Microsoft YaHei UI", 12, "bold"), wraplength=790).grid(row=0, column=0, columnspan=3, sticky="w", pady=(0, 8))
+        ttk.Label(frame, text="对照原 PDF 校正已有字段。保存仅更新预览，通过检查后再执行。", wraplength=790).grid(row=1, column=0, columnspan=3, sticky="w", pady=(0, 12))
+        for column, heading in enumerate(("字段", "原始识别值", "当前值（可修改）")):
+            ttk.Label(frame, text=heading, font=("Microsoft YaHei UI", 10, "bold")).grid(row=2, column=column, sticky="w", padx=(0, 12), pady=(0, 6))
+        variables = {}
+        for position, field in enumerate(FIELDS, 3):
+            ttk.Label(frame, text=LABELS[field]).grid(row=position, column=0, sticky="w", padx=(0, 12), pady=7)
+            ttk.Label(frame, text=field_value(original, field) or "—", wraplength=270, justify="left").grid(row=position, column=1, sticky="w", padx=(0, 16), pady=7)
+            variable = tk.StringVar(value=field_value(row, field))
+            variables[field] = variable
+            ttk.Entry(frame, textvariable=variable).grid(row=position, column=2, sticky="ew", pady=7)
+        price = tk.StringVar()
+        def refresh_price(*_):
+            price.set("单价（自动计算）：" + self._unit_price({field: variable.get() for field, variable in variables.items()}))
+        for field in ("quantity", "amount"):
+            variables[field].trace_add("write", refresh_price)
+        refresh_price()
+        ttk.Label(frame, textvariable=price).grid(row=9, column=0, columnspan=3, sticky="w", pady=(8, 6))
+        ttk.Label(frame, text="明细条数和票面总额固定；漏项、多项或整票解析失败请改进 skill。", wraplength=790).grid(row=10, column=0, columnspan=3, sticky="w", pady=(0, 12))
+        def save(restore=False):
+            if self.preview_result is not preview or self.busy:
+                messagebox.showinfo("预览已失效", "请重新预览后再校正。", parent=dialog)
+                return
+            values = None
+            if not restore:
+                try:
+                    values = normalize({field: variable.get() for field, variable in variables.items()})
+                except ValueError as exc:
+                    messagebox.showinfo("字段需要修正", str(exc), parent=dialog)
+                    return
+            controller = self.controller
+            dialog.destroy()
+            self._run(lambda: controller.correct(preview, record_index, row_index, values), self._render_preview)
+        actions = ttk.Frame(frame)
+        actions.grid(row=11, column=0, columnspan=3, sticky="w")
+        for label, action in (("保存并检查", save), ("恢复识别值", lambda: save(True)), ("打开原发票", lambda: self._open(record["pdf"])), ("取消", dialog.destroy)):
+            ttk.Button(actions, text=label, command=action).pack(side="left", padx=(0, 8))
 
     def _apply(self):
         preview = self.preview_result
@@ -375,8 +488,10 @@ class App:
     def _render_result(self, result):
         self.last_result = result
         self.preview_result = None
-        self._render_table(result["payload"], result.get("rename_plan"))
+        self.correct_button.configure(state="disabled")
+        self._render_table(result["payload"], result.get("rename_plan"), result.get("corrections"))
         parts = ["处理完成，逐分金额验证通过。" if result["status"] == "completed" else "处理未完成。", "已执行：" + "、".join(result.get("completed", []))]
+        parts.extend(self._correction_lines(result.get("original_payload", {}), result.get("corrections", {})))
         if result.get("error"):
             parts.append(result["error"])
         if result.get("rename_plan"):
