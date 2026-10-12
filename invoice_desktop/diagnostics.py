@@ -1,0 +1,50 @@
+"""Release smoke checks use newly generated files or temporary source copies."""
+import shutil
+import tempfile
+from pathlib import Path
+from openpyxl import Workbook
+
+from .controller import Controller
+from .updates import sha256
+
+
+def pipeline_smoke(source_pdf, engine_dir):
+    source = Path(source_pdf).resolve()
+    original_hash = sha256(source)
+    with tempfile.TemporaryDirectory(prefix="invoice-smoke-") as tmp:
+        root = Path(tmp)
+        directory = root / "invoices"
+        directory.mkdir()
+        shutil.copyfile(source, directory / "sample.pdf")
+        book = root / "test.xlsx"
+        wb = Workbook()
+        wb.remove(wb.active)
+        for name, primary, secondary in (("验收", "经办人", "验收人"), ("领用", "保管人", "领用人")):
+            ws = wb.create_sheet(name)
+            headers = ["序号", "产品名称", "规格型号", "单位", "数量", "单价", "金额"]
+            if name == "验收":
+                headers.append("生产厂家")
+            for col, value in enumerate(headers, 1):
+                ws.cell(3, col, value)
+            ws.cell(8, 1, "合计")
+            ws.cell(8, 5, "=SUM(E4:E7)")
+            ws.cell(8, 7, "=SUM(G4:G7)")
+            ws.cell(9, 1, primary + "：")
+            ws.cell(9, 4, secondary + "：")
+            ws.cell(9, 7, "验收日期：" if name == "验收" else "领用日期：")
+            ws.cell(9, 8, "2026.1.1")
+            ws.cell(10, 1, "说明：测试模板")
+        wb.save(book)
+        wb.close()
+        controller = Controller(engine_dir)
+        preview = controller.preview(directory, book)
+        if not preview.clean:
+            raise ValueError("临时输入预览失败：" + "；".join(preview.issues))
+        result = controller.apply(preview)
+        if result["status"] != "completed":
+            raise ValueError(result.get("error", "完整流程测试未完成"))
+        if source.exists() and sha256(source) != original_hash:
+            raise ValueError("源 PDF 指纹变化")
+        return {"status": result["status"], "completed": result["completed"], "total": result["total"],
+                "cleanup": result["cleanup"], "original_unchanged": True, "engine_version": preview.engine_version}
+

@@ -1,0 +1,278 @@
+"""Read-only preview and guarded execution of one pinned skill engine."""
+import contextlib
+import ctypes
+import importlib.util
+import io
+import json
+import os
+import shutil
+import subprocess
+import sys
+import tempfile
+from dataclasses import dataclass, field
+from decimal import Decimal
+from pathlib import Path
+
+from .updates import read_manifest, sha256
+from .workbook import plan_workbook, write_workbook, number
+
+
+def resource_root():
+    return Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parents[1]))
+
+
+def load_engine(directory, name):
+    path = Path(directory) / name
+    spec = importlib.util.spec_from_file_location("invoice_skill_" + sha256(path)[:12], path)
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    with contextlib.ExitStack():
+        original = sys.dont_write_bytecode
+        sys.dont_write_bytecode = True
+        try:
+            spec.loader.exec_module(module)
+        finally:
+            sys.dont_write_bytecode = original
+    return module
+
+
+class ExcelAdapter:
+    def _run(self, script, extra):
+        args = ["powershell.exe", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", str(script), *extra]
+        try:
+            result = subprocess.run(args, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=240,
+                                    creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            raise ValueError(f"Excel 操作未完成：{exc}") from exc
+        if result.returncode:
+            raise ValueError("Excel 不可用或操作失败：" + (result.stderr or result.stdout).strip()[-2000:])
+
+    def check(self, workbook):
+        if os.name != "nt":
+            raise ValueError("此版本仅支持 Windows 与 Microsoft Excel 桌面版")
+        kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel.CreateFileW.argtypes = [ctypes.c_wchar_p, ctypes.c_uint32, ctypes.c_uint32, ctypes.c_void_p, ctypes.c_uint32, ctypes.c_uint32, ctypes.c_void_p]
+        kernel.CreateFileW.restype = ctypes.c_void_p
+        kernel.CloseHandle.argtypes = [ctypes.c_void_p]
+        handle = kernel.CreateFileW(str(workbook), 0x80000000 | 0x40000000, 0, None, 3, 0, None)
+        if handle == ctypes.c_void_p(-1).value:
+            raise ValueError("工作簿被占用或没有写入权限，请关闭 Excel 中的该文件后重新预览")
+        kernel.CloseHandle(handle)
+        self._run(resource_root() / "resources/check_excel.ps1", [])
+
+    def apply(self, script, workbook):
+        self._run(resource_root() / "resources/run_excel.ps1", ["-EngineScript", str(script), "-WorkbookInput", str(workbook)])
+
+
+@dataclass
+class Preview:
+    pdf_dir: Path
+    workbook: Path
+    engine_dir: Path
+    engine_version: str
+    payload: dict
+    fingerprints: dict
+    issues: list = field(default_factory=list)
+    rows_to_add: int = 0
+    blank_rows_to_remove: dict = field(default_factory=dict)
+    sheet_details: dict = field(default_factory=dict)
+    total: str = "0.00"
+
+    @property
+    def clean(self):
+        return not self.issues
+
+    @property
+    def has_changes(self):
+        return self.rows_to_add > 0 or any(self.blank_rows_to_remove.values()) or any(e.get("status") == "ready" for e in self.payload.get("rename_plan", []))
+
+
+class Controller:
+    def __init__(self, engine_dir, progress=None, excel=None):
+        self.engine_dir = Path(engine_dir).resolve()
+        self.progress = progress or (lambda message: None)
+        self.excel = excel or ExcelAdapter()
+        self.last_scratch = None
+        self.cleanup_error = None
+
+    @contextlib.contextmanager
+    def _scratch(self):
+        parent = Path(tempfile.gettempdir()).resolve()
+        path = Path(tempfile.mkdtemp(prefix="invoice-run-", dir=parent)).resolve()
+        self.last_scratch = path
+        self.cleanup_error = None
+        try:
+            yield path
+        finally:
+            try:
+                if path.parent != parent or not path.name.startswith("invoice-run-"):
+                    raise ValueError("临时目录越界，已停止清理")
+                shutil.rmtree(path)
+            except Exception as exc:
+                self.cleanup_error = f"{path}：{exc}"
+
+    def _invoke(self, kind, args, report):
+        name = "collect_excel_totals.py" if kind == "totals" else "invoice_pipeline.py"
+        module = load_engine(self.engine_dir, name)
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output), contextlib.redirect_stderr(output):
+            try:
+                status = module.main(args)
+            except SystemExit as exc:
+                raise ValueError(output.getvalue().strip() or f"识别脚本异常退出：{exc.code}") from exc
+        if status not in (None, 0):
+            raise ValueError(output.getvalue().strip() or "识别脚本执行失败")
+        data = json.loads(Path(report).read_text(encoding="utf-8"))
+        if not isinstance(data, dict):
+            raise ValueError("识别结果格式不兼容，请升级软件")
+        return data
+
+    def _fingerprints(self, directory, workbook):
+        parser = load_engine(self.engine_dir, "invoice_pipeline.py")
+        files = [workbook, *(p for p in sorted(directory.glob("*.pdf")) if not parser.is_verification_report_pdf(p))]
+        return {str(path): sha256(path) for path in files}
+
+    def _actual_rename_plan(self, preview):
+        actual = []
+        for item in preview.payload["rename_plan"]:
+            source, destination = Path(item["source"]), Path(item["destination"])
+            if source == destination and source.is_file():
+                status = "unchanged"
+            elif destination.is_file() and not source.exists():
+                status = "renamed"
+            else:
+                status = "not_completed"
+            actual.append(dict(item, status=status))
+        return actual
+
+    def preview(self, pdf_dir, workbook):
+        directory, book = Path(pdf_dir).resolve(), Path(workbook).resolve()
+        if not directory.is_dir():
+            raise ValueError("请选择有效的 PDF 文件夹")
+        if book.suffix.lower() != ".xlsx" or not book.is_file():
+            raise ValueError("请选择现有的 .xlsx 工作簿")
+        manifest = read_manifest(self.engine_dir)
+        self.progress("正在读取发票，仅作预览…")
+        before = self._fingerprints(directory, book)
+        with self._scratch() as scratch:
+            report = scratch / "preview.json"
+            data = self._invoke("pipeline", ["preview", "--pdf-dir", str(directory), "--report", str(report)], report)
+            result = Preview(directory, book, self.engine_dir, manifest["version"], data, before)
+            for item in data.get("exceptions", []):
+                result.issues.append(f"{Path(item.get('pdf', '')).name} · {item.get('field', '')}：{item.get('message', '')}")
+            records = data.get("records", [])
+            plan = data.get("rename_plan", [])
+            if not records:
+                result.issues.append("没有可处理的发票")
+            if len(plan) != len(records):
+                result.issues.append("发票与改名计划不对应，识别接口需要适配")
+            sources, targets = set(), set()
+            for item in plan:
+                source, destination = Path(item["source"]).resolve(), Path(item["destination"]).resolve()
+                if source.parent != directory or destination.parent != directory:
+                    result.issues.append("改名计划超出所选文件夹")
+                if item.get("status") not in ("ready", "unchanged"):
+                    result.issues.append(f"文件重名或改名状态异常：{destination.name}")
+                if str(source).casefold() in sources or str(destination).casefold() in targets:
+                    result.issues.append("改名计划包含重复来源或目标")
+                sources.add(str(source).casefold())
+                targets.add(str(destination).casefold())
+            try:
+                sequences = [r["sequence"] for r in records]
+                if sequences != list(range(1, len(records)+1)):
+                    raise ValueError("发票序号必须从 1 连续且逐票唯一")
+                total = Decimal("0.00")
+                for record in records:
+                    grand = number(record["grand_total"], "发票金额", cents=True)
+                    detail = number(record["detail_total"], "明细金额", cents=True)
+                    row_total = sum((number(r["amount"], "明细金额", cents=True) for r in record.get("rows", [])), Decimal("0.00"))
+                    if not record.get("rows") or grand != detail or grand != row_total:
+                        raise ValueError(f"序号 {record['sequence']} 发票金额与明细金额不一致")
+                    if any(r.get("sequence") != record["sequence"] for r in record["rows"]):
+                        raise ValueError("同一发票的明细序号不一致")
+                    total += grand
+                result.total = format(total, ".2f")
+                self.progress("正在检查工作簿表头、页脚和明细映射…")
+                writer_plan = plan_workbook(book, data)
+                result.rows_to_add = writer_plan.rows_to_add
+                result.blank_rows_to_remove = writer_plan.blank_rows_to_remove
+                result.sheet_details = writer_plan.sheet_details
+                writer_plan.workbook.close()
+                if len(writer_plan.sheet_details) != 2:
+                    result.issues.append("工作簿映射不完整")
+                # The shared font script visits every sheet, so detect this before any write.
+                from openpyxl import load_workbook
+                wb = load_workbook(book, read_only=True)
+                try:
+                    for ws in wb:
+                        if not any(row[0] == "序号" for row in ws.iter_rows(values_only=True)):
+                            result.issues.append(f"{ws.title} 无序号表头，不符合当前 skill 字体处理约定")
+                finally:
+                    wb.close()
+            except (ValueError, KeyError, TypeError) as exc:
+                result.issues.append(str(exc))
+            if before != self._fingerprints(directory, book):
+                result.issues.append("文件在预览过程中发生变化，请重新预览")
+        if self.cleanup_error:
+            result.issues.append("临时文件清理未完成：" + self.cleanup_error)
+        self.progress("预览结束：" + ("可处理" if result.clean else "存在待解决异常"))
+        return result
+
+    def apply(self, preview):
+        if not preview.clean:
+            raise ValueError("存在未解决异常，不能执行处理")
+        if preview.engine_dir != self.engine_dir or read_manifest(self.engine_dir)["version"] != preview.engine_version:
+            raise ValueError("识别版本发生变化，请重新预览")
+        if preview.fingerprints != self._fingerprints(preview.pdf_dir, preview.workbook):
+            raise ValueError("预览后输入文件或目录发生变化，请重新预览")
+        if not preview.has_changes:
+            return dict(status="no_change", total=preview.total, completed=[], cleanup="完成", payload=preview.payload)
+        self.progress("正在检查 Excel 与文件写入权限…")
+        self.excel.check(preview.workbook)
+        result = dict(status="failed", completed=[], total=preview.total, payload=preview.payload, engine_version=preview.engine_version)
+        with self._scratch() as scratch:
+            try:
+                records = scratch / "preview.json"
+                records.write_text(json.dumps(preview.payload, ensure_ascii=False), encoding="utf-8")
+                writer_plan = plan_workbook(preview.workbook, preview.payload)
+                if preview.fingerprints != self._fingerprints(preview.pdf_dir, preview.workbook):
+                    writer_plan.workbook.close()
+                    raise ValueError("执行前文件再次发生变化，请重新预览")
+                self.progress("正在重命名发票…")
+                rename_report = scratch / "rename-report.json"
+                try:
+                    renamed = self._invoke("pipeline", ["rename", "--records", str(records), "--apply", "--report", str(rename_report)], rename_report)
+                    result["rename_plan"] = self._actual_rename_plan(preview)
+                    if (renamed.get("exceptions") or len(renamed.get("rename_plan", [])) != len(preview.payload["rename_plan"])
+                            or any(p.get("status") not in ("renamed", "unchanged") for p in renamed.get("rename_plan", []))
+                            or any(p["status"] not in ("renamed", "unchanged") or sha256(p["destination"]) != preview.fingerprints[p["source"]] for p in result["rename_plan"])):
+                        raise ValueError("发票改名未完成：" + json.dumps(renamed.get("exceptions", []), ensure_ascii=False))
+                    result["completed"].append("发票改名")
+                    self.progress("正在原位写入工作簿…")
+                    write_workbook(writer_plan)
+                finally:
+                    writer_plan.workbook.close()
+                result["completed"].append("写入工作簿")
+                self.progress("正在应用字体并通过 Excel 重算…")
+                self.excel.apply(self.engine_dir / "apply_mixed_fonts_excel.ps1", preview.workbook)
+                result["completed"].append("字体与重算")
+                self.progress("正在逐票核对金额与两张表的总计…")
+                totals_path = scratch / "totals.json"
+                result["totals"] = self._invoke("totals", ["--input", str(preview.workbook), "--output", str(totals_path)], totals_path)
+                verification_path = scratch / "verification.json"
+                verified = self._invoke("pipeline", ["verify", "--records", str(records), "--excel-totals", str(totals_path), "--report", str(verification_path)], verification_path)
+                result["verification"] = verified
+                checks = verified.get("verification", [])
+                if (verified.get("exceptions") or len(checks) != len(preview.payload["records"])
+                        or any(v.get("status") != "passed" for v in checks)
+                        or verified.get("batch_verification", {}).get("status") != "passed"):
+                    raise ValueError("逐分金额验证失败，请查看异常和实际已执行步骤")
+                result["completed"].append("逐分验证")
+                result["status"] = "completed"
+                result["blank_rows_removed"] = preview.blank_rows_to_remove
+            except Exception as exc:
+                result["error"] = str(exc)
+                result["rename_plan"] = self._actual_rename_plan(preview)
+        result["cleanup"] = self.cleanup_error or "完成"
+        self.progress("处理完成" if result["status"] == "completed" else "处理未完成，请查看结果")
+        return result

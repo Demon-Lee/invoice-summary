@@ -1,0 +1,11 @@
+{
+  "format_version": 1,
+  "version": "42334e9f238e",
+  "files": {
+    "SKILL.md": "7094ae5238d9d51c29e888b556bdd969c10cde7deddee14ad0980a66c0555a90",
+    "invoice_pipeline.py": "e6519727bce370c17f61fe8885f63a3d9ff70408072b13567a7b6870c0b337cb",
+    "collect_excel_totals.py": "da91dc743d0d6350d0856d2025ede74fb63cf811ffa947dcffb934b92a0b6064",
+    "apply_mixed_fonts_excel.ps1": "9ddc063ec93db575a9d433f85db677601cfabffcbdf7be5e66ae1488eb843318"
+  },
+  "source_writer_sha256": "6b196680c47d483ec11c3216282b2147781e02420f38a47c627c879e8777a2b9"
+}
