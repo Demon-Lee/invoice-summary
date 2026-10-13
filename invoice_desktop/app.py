@@ -9,13 +9,13 @@ import tkinter as tk
 from pathlib import Path
 from decimal import Decimal, InvalidOperation
 from tkinter import filedialog, messagebox, ttk
-from tkinter.scrolledtext import ScrolledText
 
 from . import __version__
 from .controller import Controller, resource_root, application_root
 from .updates import EngineStore, export_update, read_manifest, SharedInterfaceIncompatible
 from .corrections import FIELDS, LABELS, field_value, normalize
 from .policy import BOUNDARY_GUIDE, RETAINED_FEATURES, describe_changes
+from .ui import FONT, PALETTE, build_interface, set_stage_style, surface, text_widget
 
 EXECUTION_STEPS = (
     "1. 选择完整批次的 PDF 文件夹和目标 .xlsx 工作簿。",
@@ -25,7 +25,7 @@ EXECUTION_STEPS = (
 )
 NECESSARY_CONDITIONS = (
     "Windows 10/11，已安装 Microsoft Excel 桌面版。",
-    "有文本层的电子 PDF；每次选择完整批次，旧明细全部替换。",
+    "有文本层的电子 PDF，不支持扫描件；选择完整批次。",
     "约定格式的 .xlsx，含“验收”“领用”、表头、日期与三行页脚。",
     "执行前关闭目标工作簿；软件和输入文件所在目录须可写。",
 )
@@ -119,6 +119,10 @@ class App:
         self.book = tk.StringVar()
         self.status = tk.StringVar(value="选择文件，然后进行只读预览")
         self.summary = tk.StringVar(value="文件在本机处理 · Microsoft Excel 桌面版必需")
+        self.metric_invoices = tk.StringVar(value="—")
+        self.metric_rows = tk.StringVar(value="—")
+        self.metric_total = tk.StringVar(value="—")
+        self.metric_corrections = tk.StringVar(value="—")
         self.stage_title = tk.StringVar(value="等待只读预览")
         self.stage_detail = tk.StringVar(value="选择完整批次的 PDF 文件夹和目标工作簿，然后点击“只读预览”。")
         self.version = tk.StringVar()
@@ -144,176 +148,27 @@ class App:
         self.root.after(100, self._poll)
         self.root.after(3000, self._periodic_source)
 
-    def _button(self, parent, label, action):
-        widget = ttk.Button(parent, text=label, command=action)
+    def _button(self, parent, label, action, *, style="Secondary.TButton"):
+        widget = ttk.Button(parent, text=label, command=action, style=style)
         self.interactive.append(widget)
         return widget
 
     def _build(self):
-        self.root.title("发票汇总助手")
         icon = resource_root() / "resources/app.ico"
         if icon.exists():
             self.root.iconbitmap(str(icon))
-        self.root.geometry("1140x900")
-        self.root.minsize(900, 760)
-        self.root.configure(bg="#f4f7fb")
-        style = ttk.Style()
-        style.theme_use("clam")
-        style.configure(".", font=("Microsoft YaHei UI", 10))
-        style.configure("TFrame", background="#f4f7fb")
-        style.configure("TLabel", background="#f4f7fb", foreground="#18304e")
-        style.configure("Title.TLabel", font=("Microsoft YaHei UI", 22, "bold"))
-        for name, background, foreground in (("Steps", "#eaf3ff", "#173b68"), ("Conditions", "#fff4dc", "#674515")):
-            style.configure(f"{name}.TFrame", background=background)
-            style.configure(f"{name}Title.TLabel", background=background, foreground=foreground, font=("Microsoft YaHei UI", 14, "bold"))
-            style.configure(f"{name}Body.TLabel", background=background, foreground="#243d55")
-        style.configure("Notice.TLabel", foreground="#874026", font=("Microsoft YaHei UI", 10, "bold"))
-        style.configure("TButton", padding=(12, 8))
-        style.configure("Treeview", rowheight=32, background="white", fieldbackground="white")
-        style.configure("Treeview.Heading", font=("Microsoft YaHei UI", 10, "bold"), padding=8)
-        style.map("Treeview", background=[("selected", "#dbeafe")], foreground=[("selected", "#12385c")])
-        outer = ttk.Frame(self.root, padding=20)
-        outer.pack(fill="both", expand=True)
-        ttk.Label(outer, text="发票汇总助手", style="Title.TLabel").pack(anchor="w")
-        ttk.Label(outer, text="离线处理 · 先预览，再执行 · 逐分复核金额").pack(anchor="w", pady=(4, 16))
-        tabs = ttk.Notebook(outer)
-        tabs.pack(fill="both", expand=True)
-        process = ttk.Frame(tabs, padding=16)
-        rules = ttk.Frame(tabs, padding=16)
-        help_tab = ttk.Frame(tabs, padding=16)
-        tabs.add(process, text="处理发票")
-        tabs.add(rules, text="规则与更新")
-        tabs.add(help_tab, text="使用说明")
-        process.columnconfigure(1, weight=1)
-        process.rowconfigure(6, weight=1)
-        guidance = ttk.Frame(process)
-        guidance.grid(row=0, column=0, columnspan=3, sticky="ew", pady=(0, 8))
-        guidance.columnconfigure((0, 1), weight=1, uniform="guidance")
-        self._guide_card(guidance, 0, "执行步骤", EXECUTION_STEPS, "Steps", (0, 6))
-        self._guide_card(guidance, 1, "必要条件", NECESSARY_CONDITIONS, "Conditions", (6, 0))
-        notice = ttk.Label(guidance, text=PROCESS_NOTICE, style="Notice.TLabel", wraplength=780)
-        notice.grid(row=1, column=0, columnspan=2, sticky="w", pady=(8, 0))
-        guidance.bind("<Configure>", lambda event: notice.configure(wraplength=max(180, event.width)))
-        for row, label, variable, action in ((1, "PDF 文件夹", self.pdf, self._pick_pdf), (2, "目标工作簿", self.book, self._pick_book)):
-            ttk.Label(process, text=label).grid(row=row, column=0, sticky="w", padx=(0, 12), pady=6)
-            entry = ttk.Entry(process, textvariable=variable)
-            entry.grid(row=row, column=1, sticky="ew", pady=6)
-            self.interactive.append(entry)
-            self._button(process, "选择", action).grid(row=row, column=2, padx=(10, 0))
-        buttons = ttk.Frame(process)
-        buttons.grid(row=3, column=0, columnspan=3, sticky="w", pady=(12, 8))
-        self.preview_button = self._button(buttons, "只读预览", self._preview)
-        self.preview_button.pack(side="left", padx=(0, 8))
-        self.execute = self._button(buttons, "执行处理", self._apply)
-        self.execute.pack(side="left", padx=(0, 8))
-        self.execute.configure(state="disabled")
-        self.correct_button = self._button(buttons, "人工校正", self._edit_detail)
-        self.correct_button.pack(side="left", padx=(0, 8))
-        self.correct_button.configure(state="disabled")
-        self._button(buttons, "打开发票目录", lambda: self._open(self.pdf.get())).pack(side="left", padx=(0, 8))
-        self._button(buttons, "打开工作簿", lambda: self._open(self.book.get())).pack(side="left")
-        self.stage_card = tk.Frame(process, padx=12, pady=6, highlightthickness=1)
-        self.stage_card.grid(row=4, column=0, columnspan=3, sticky="ew", pady=(4, 4))
-        self.stage_heading = tk.Label(self.stage_card, textvariable=self.stage_title, font=("Microsoft YaHei UI", 14, "bold"), anchor="w", justify="left")
-        self.stage_heading.pack(fill="x")
-        self.stage_body = tk.Label(self.stage_card, textvariable=self.stage_detail, font=("Microsoft YaHei UI", 10), anchor="w", justify="left", wraplength=900)
-        self.stage_body.pack(fill="x", pady=(2, 0))
-        self.stage_summary = tk.Label(self.stage_card, textvariable=self.summary, font=("Microsoft YaHei UI", 9), anchor="w", justify="left", wraplength=900)
-        self.stage_summary.pack(fill="x", pady=(2, 0))
-        def wrap_stage(event):
-            for label in (self.stage_heading, self.stage_body, self.stage_summary):
-                label.configure(wraplength=max(180, event.width - 26))
-        self.stage_card.bind("<Configure>", wrap_stage)
-        self._set_stage("idle", self.stage_title.get(), self.stage_detail.get())
-        ttk.Label(process, textvariable=self.preview_note, wraplength=950).grid(row=5, column=0, columnspan=3, sticky="ew", pady=(6, 4))
-        table = ttk.Frame(process)
-        table.grid(row=6, column=0, columnspan=3, sticky="nsew")
-        table.rowconfigure(0, weight=1)
-        table.columnconfigure(0, weight=1)
-        columns = ("sequence", "filename", "product_name", "spec", "unit", "quantity", "price", "amount", "manufacturer", "correction")
-        self.tree = ttk.Treeview(table, columns=columns, show="headings")
-        for name, label, width in zip(columns, ("序号", "PDF → 新文件名", "产品名称", "规格型号", "单位", "数量", "单价（自动）", "含税金额", "生产厂家", "人工校正"), (55, 290, 160, 125, 60, 70, 105, 105, 180, 85)):
-            self.tree.heading(name, text=label)
-            self.tree.column(name, width=width, minwidth=40, anchor="w" if name in ("filename", "product_name", "spec", "manufacturer") else "center", stretch=name == "filename")
-        self.tree.tag_configure("corrected", background="#fff4dc")
-        self.tree.bind("<Double-1>", self._edit_detail)
-        self.tree.grid(row=0, column=0, sticky="nsew")
-        vertical = ttk.Scrollbar(table, orient="vertical", command=self.tree.yview)
-        vertical.grid(row=0, column=1, sticky="ns")
-        scroll = ttk.Scrollbar(table, orient="horizontal", command=self.tree.xview)
-        scroll.grid(row=1, column=0, sticky="ew")
-        self.tree.configure(yscrollcommand=vertical.set, xscrollcommand=scroll.set)
-        report_heading = ttk.Frame(process)
-        report_heading.grid(row=7, column=0, columnspan=3, sticky="ew", pady=(10, 4))
-        ttk.Label(report_heading, text="检查、异常与实际结果").pack(side="left")
-        self.copy_report_button = self._button(report_heading, "复制报告", self._copy_report)
-        self.copy_report_button.pack(side="right")
-        self.copy_report_button.configure(state="disabled")
-        self.report = self._text(process, height=5)
-        self.report.grid(row=8, column=0, columnspan=3, sticky="ew")
-        ttk.Label(outer, textvariable=self.status).pack(anchor="w", pady=(12, 5))
-        self.progress_bar = ttk.Progressbar(outer, mode="indeterminate")
-        self.progress_bar.pack(fill="x")
-        ttk.Label(rules, textvariable=self.version, font=("Microsoft YaHei UI", 12, "bold")).pack(anchor="w", pady=(0, 10))
-        ttk.Label(rules, text="普通用户：完整解压即可使用随包规则，无需安装或同步 skill。下面的本机同步、导出和分发操作供维护者使用。", wraplength=950).pack(anchor="w")
-        ttk.Label(rules, text="维护者：同步仅更新共享规则，人工校正、清空重填等功能保留。更新成功后关闭软件，打包整个软件文件夹分发。", wraplength=950).pack(anchor="w", pady=(4, 0))
-        ttk.Label(rules, text=f"软件文件夹：{self.application_dir}", wraplength=950).pack(anchor="w", pady=(6, 0))
-        source_row = ttk.Frame(rules)
-        source_row.pack(fill="x", pady=10)
-        entry = ttk.Entry(source_row, textvariable=self.source)
-        entry.pack(side="left", fill="x", expand=True)
-        self.interactive.append(entry)
-        self._button(source_row, "选择 skill", self._pick_source).pack(side="left", padx=(8, 0))
-        source_buttons = ttk.Frame(rules)
-        source_buttons.pack(anchor="w", pady=5)
-        for label, action in (("同步本机 skill", self._sync), ("打开软件文件夹", lambda: self._open(self.application_dir)), ("导出离线更新包", self._export), ("导入更新包", self._import), ("回退版本", self._rollback), ("解除绑定", self._unbind)):
-            self._button(source_buttons, label, action).pack(side="left", padx=(0, 6))
-        ttk.Label(rules, textvariable=self.source_status, wraplength=950).pack(anchor="w", pady=10)
-        self.rule_tabs = ttk.Notebook(rules)
-        self.rule_tabs.pack(fill="both", expand=True)
-        boundary_tab = ttk.Frame(self.rule_tabs, padding=8)
-        self.update_tab = ttk.Frame(self.rule_tabs, padding=8)
-        reference_tab = ttk.Frame(self.rule_tabs, padding=8)
-        self.rule_tabs.add(boundary_tab, text="功能归属")
-        self.rule_tabs.add(self.update_tab, text="本次更新结果")
-        self.rule_tabs.add(reference_tab, text="skill 原始说明")
-        self.boundary_text = self._text(boundary_tab)
-        self.boundary_text.pack(fill="both", expand=True)
-        self._set_text(self.boundary_text, BOUNDARY_GUIDE)
-        self._mark_headings(self.boundary_text, BOUNDARY_GUIDE)
-        self.update_text = self._text(self.update_tab)
-        self.update_text.pack(fill="both", expand=True)
-        self._set_text(self.update_text, "同步、导入或回退共享规则后，这里会显示更新范围和保留的软件功能。\n\n" + "保留的软件功能：" + RETAINED_FEATURES)
-        ttk.Label(reference_tab, text="此页保留 skill 原文作为共享规则来源参考。软件交互、人工校正及整批重填以“功能归属”页为准。", wraplength=950).pack(anchor="w", pady=(0, 6))
-        self.rule_text = self._text(reference_tab)
-        self.rule_text.pack(fill="both", expand=True)
-        text_widget = self._text(help_tab)
-        text_widget.pack(fill="both", expand=True)
-        self._set_text(text_widget, HELP)
-        self._mark_headings(text_widget, HELP)
+        build_interface(self, execution_steps=EXECUTION_STEPS, necessary_conditions=NECESSARY_CONDITIONS,
+                        process_notice=PROCESS_NOTICE, preview_note=PREVIEW_NOTE, help_text=HELP,
+                        boundary_guide=BOUNDARY_GUIDE, retained_features=RETAINED_FEATURES)
 
     def _mark_headings(self, widget, content):
-        widget.tag_configure("section", font=("Microsoft YaHei UI", 16, "bold"), foreground="#173b68", spacing1=12, spacing3=8)
+        widget.tag_configure("section", font=(FONT, 13, "bold"), foreground=PALETTE["heading"], spacing1=14, spacing3=8)
         for line_number, line in enumerate(content.splitlines(), 1):
             if line in HELP_HEADINGS:
                 widget.tag_add("section", f"{line_number}.0", f"{line_number}.end")
 
-    def _guide_card(self, parent, column, title, items, style_name, padding):
-        card = ttk.Frame(parent, padding=(14, 10), style=f"{style_name}.TFrame")
-        card.grid(row=0, column=column, sticky="nsew", padx=padding)
-        ttk.Label(card, text=title, style=f"{style_name}Title.TLabel").pack(anchor="w", pady=(0, 6))
-        labels = []
-        for item in items:
-            label = ttk.Label(card, text=item, style=f"{style_name}Body.TLabel", wraplength=400, justify="left")
-            label.pack(anchor="w", fill="x", pady=2)
-            labels.append(label)
-        def update_wrap(event):
-            for label in labels:
-                label.configure(wraplength=max(180, event.width - 28))
-        card.bind("<Configure>", update_wrap)
-
     def _text(self, parent, height=15):
-        return ScrolledText(parent, height=height, wrap="word", bg="white", fg="#243d55", relief="flat", padx=10, pady=8, font=("Microsoft YaHei UI", 10), state="disabled")
+        return text_widget(parent, height)
 
     def _set_text(self, widget, value):
         widget.configure(state="normal")
@@ -322,6 +177,8 @@ class App:
         widget.configure(state="disabled")
         widget.yview_moveto(0)
         if widget is getattr(self, "report", None):
+            widget.tag_configure("report_title", font=(FONT, 9, "bold"), foreground=PALETTE["heading"])
+            widget.tag_add("report_title", "1.0", "1.end")
             self.copy_report_button.configure(state="normal" if value and not self.busy else "disabled")
 
     def _copy_report(self):
@@ -356,19 +213,35 @@ class App:
         finally:
             self._confirming_discard = False
 
+    def _update_action_styles(self):
+        execute_primary = not self.busy and str(self.execute.cget("state")) == "normal"
+        for widget, style_name in (
+            (self.execute, "Primary.TButton" if execute_primary else "Secondary.TButton"),
+            (self.preview_button, "Secondary.TButton" if execute_primary or self.busy else "Primary.TButton"),
+        ):
+            if str(widget.cget("style")) != style_name:
+                widget.configure(style=style_name)
+        if getattr(self, "stage_tone", None) == "success":
+            badge = "可以执行" if execute_primary else "阶段完成"
+            if self.stage_badge.cget("text") != badge:
+                self.stage_badge.configure(text=badge)
+
+    def _update_metrics(self, payload=None, total=None, corrections=None):
+        if payload is None:
+            for variable in (self.metric_invoices, self.metric_rows, self.metric_total, self.metric_corrections):
+                variable.set("—")
+            return
+        records = payload.get("records", [])
+        self.metric_invoices.set(str(len(records)))
+        self.metric_rows.set(str(sum(len(record.get("rows", [])) for record in records)))
+        self.metric_total.set("—" if total is None else f"¥{total}")
+        self.metric_corrections.set(str(len(corrections or {})))
+
     def _set_stage(self, tone, title, detail):
-        background, foreground, border = {
-            "idle": ("#edf1f5", "#435367", "#c4ccd6"),
-            "working": ("#eaf3ff", "#173b68", "#76a6db"),
-            "success": ("#e8f5eb", "#205d32", "#6aab7a"),
-            "warning": ("#fff4dc", "#79520e", "#c79939"),
-            "error": ("#fdecea", "#962c25", "#ce776e"),
-        }[tone]
         self.stage_title.set(title)
         self.stage_detail.set(detail)
-        self.stage_card.configure(bg=background, highlightbackground=border, highlightcolor=border)
-        for label in (self.stage_heading, self.stage_body, self.stage_summary):
-            label.configure(bg=background, fg=foreground)
+        set_stage_style(self, tone)
+        self._update_action_styles()
 
     def _complete_stage(self, tone, title, detail, *, notify=False, reason=None):
         self._set_stage(tone, title, detail)
@@ -410,6 +283,7 @@ class App:
                 return
         self.preview_result = None
         self._update_preview_note()
+        self._update_metrics()
         self.execute.configure(state="disabled")
         self.correct_button.configure(state="disabled")
         self._set_stage("idle", "需要重新预览", "输入或规则已变更；请点击“只读预览”，完成检查后再执行。")
@@ -525,6 +399,7 @@ class App:
         self.execute.configure(state="disabled")
         for widget in self.interactive:
             widget.configure(state="disabled")
+        self._update_action_styles()
         self.progress_bar.start(12)
         def worker():
             try:
@@ -578,6 +453,7 @@ class App:
                         messagebox.showerror("操作未完成", event[1], parent=self.root)
         except queue.Empty:
             pass
+        self._update_action_styles()
         self.root.after(100, self._poll)
 
     def _preview(self):
@@ -601,6 +477,7 @@ class App:
         self.correct_button.configure(state="normal" if preview.payload.get("records") and not preview.resume_pending else "disabled")
         invoices = len(preview.payload.get("records", []))
         rows = sum(len(r.get("rows", [])) for r in preview.payload.get("records", []))
+        self._update_metrics(preview.payload, preview.total, preview.corrections)
         self.summary.set(f"{invoices} 张发票 · 整批重填 {rows} 条明细 · 本批合计 ¥{preview.total} · 人工校正 {len(preview.corrections)} 条")
         parts = ["异常：\n" + "\n".join(preview.issues), "下一步：可校正的字段请双击明细修改；结构或模板问题解决后再重新预览。"] if preview.issues else ["异常：无；只读预览通过，尚未改动文件。"]
         parts.extend([f"目标工作簿：{preview.workbook}（原位更新，不自动创建备份）", f"识别版本：{preview.engine_version}", "填表方式：清空两表主表旧明细（含品牌、备注），按本次完整批次重填，保留右侧模板内容。"])
@@ -634,6 +511,7 @@ class App:
     def _render_table(self, payload, renamed=None, corrections=None):
         self.tree.delete(*self.tree.get_children())
         plans = {p["source"]: p for p in (renamed or payload.get("rename_plan", []))}
+        visible_row = 0
         for record_index, record in enumerate(payload.get("records", [])):
             source = record["pdf"]
             destination = plans.get(source, {}).get("destination", source)
@@ -642,7 +520,8 @@ class App:
                 key = f"{record_index}:{row_index}"
                 corrected = bool((corrections or {}).get(key))
                 price = self._unit_price(row)
-                self.tree.insert("", "end", iid=key, tags=("corrected",) if corrected else (), values=(record["sequence"], mapping, row.get("product_name") or "—", row.get("spec") or "—", row.get("unit") or "—", field_value(row, "quantity"), price, "¥" + str(row.get("amount", "—")), row.get("manufacturer") or "—", "已校正" if corrected else ""))
+                self.tree.insert("", "end", iid=key, tags=("corrected",) if corrected else ("odd" if visible_row % 2 else "even",), values=(record["sequence"], mapping, row.get("product_name") or "—", row.get("spec") or "—", row.get("unit") or "—", field_value(row, "quantity"), price, "¥" + str(row.get("amount", "—")), row.get("manufacturer") or "—", "已校正" if corrected else ""))
+                visible_row += 1
 
     def _unit_price(self, row):
         try:
@@ -698,18 +577,20 @@ class App:
         dialog.transient(self.root)
         dialog.geometry("860x540")
         dialog.minsize(720, 500)
+        dialog.configure(bg=PALETTE["background"])
         dialog.grab_set()
-        frame = ttk.Frame(dialog, padding=20)
+        frame = surface(dialog, padding=18)
         frame.pack(fill="both", expand=True)
         frame.columnconfigure(2, weight=1)
-        ttk.Label(frame, text=Path(record["pdf"]).name, font=("Microsoft YaHei UI", 12, "bold"), wraplength=790).grid(row=0, column=0, columnspan=3, sticky="w", pady=(0, 8))
-        ttk.Label(frame, text="对照原 PDF 校正已有字段。保存仅更新预览，通过检查后再执行。", wraplength=790).grid(row=1, column=0, columnspan=3, sticky="w", pady=(0, 12))
+        frame.columnconfigure(1, minsize=260)
+        ttk.Label(frame, text=Path(record["pdf"]).name, style="Section.TLabel", wraplength=790).grid(row=0, column=0, columnspan=3, sticky="w", pady=(0, 8))
+        ttk.Label(frame, text="对照原 PDF 校正已有字段。保存仅更新预览，通过检查后再执行。", style="Muted.TLabel", wraplength=790).grid(row=1, column=0, columnspan=3, sticky="w", pady=(0, 14))
         for column, heading in enumerate(("字段", "原始识别值", "当前值（可修改）")):
-            ttk.Label(frame, text=heading, font=("Microsoft YaHei UI", 10, "bold")).grid(row=2, column=column, sticky="w", padx=(0, 12), pady=(0, 6))
+            ttk.Label(frame, text=heading, style="Section.TLabel").grid(row=2, column=column, sticky="w", padx=(0, 12), pady=(0, 8))
         variables = {}
         for position, field in enumerate(FIELDS, 3):
-            ttk.Label(frame, text=LABELS[field]).grid(row=position, column=0, sticky="w", padx=(0, 12), pady=7)
-            ttk.Label(frame, text=field_value(original, field) or "—", wraplength=270, justify="left").grid(row=position, column=1, sticky="w", padx=(0, 16), pady=7)
+            ttk.Label(frame, text=LABELS[field], style="Surface.TLabel").grid(row=position, column=0, sticky="w", padx=(0, 16), pady=7)
+            ttk.Label(frame, text=field_value(original, field) or "—", style="Muted.TLabel", wraplength=250, justify="left").grid(row=position, column=1, sticky="w", padx=(0, 16), pady=7)
             variable = tk.StringVar(value=field_value(row, field))
             variables[field] = variable
             ttk.Entry(frame, textvariable=variable).grid(row=position, column=2, sticky="ew", pady=7)
@@ -719,8 +600,8 @@ class App:
         for field in ("quantity", "amount"):
             variables[field].trace_add("write", refresh_price)
         refresh_price()
-        ttk.Label(frame, textvariable=price).grid(row=9, column=0, columnspan=3, sticky="w", pady=(8, 6))
-        ttk.Label(frame, text="明细条数和票面总额固定；漏项、多项或整票解析失败请改进 skill。", wraplength=790).grid(row=10, column=0, columnspan=3, sticky="w", pady=(0, 12))
+        ttk.Label(frame, textvariable=price, style="Section.TLabel").grid(row=9, column=0, columnspan=3, sticky="w", pady=(10, 8))
+        ttk.Label(frame, text="明细条数和票面总额固定；漏项、多项或整票解析失败请改进 skill。", style="Muted.TLabel", wraplength=790).grid(row=10, column=0, columnspan=3, sticky="w", pady=(0, 12))
         def save(restore=False):
             if self.preview_result is not preview or self.busy:
                 messagebox.showinfo("预览已失效", "请重新预览后再校正。", parent=dialog)
@@ -735,10 +616,10 @@ class App:
             controller = self.controller
             dialog.destroy()
             self._run(lambda: controller.correct(preview, record_index, row_index, values), self._render_preview, stage="correction")
-        actions = ttk.Frame(frame)
+        actions = ttk.Frame(frame, style="Surface.TFrame")
         actions.grid(row=11, column=0, columnspan=3, sticky="w")
         for label, action in (("保存并检查", save), ("恢复识别值", lambda: save(True)), ("打开原发票", lambda: self._open(record["pdf"])), ("取消", dialog.destroy)):
-            ttk.Button(actions, text=label, command=action).pack(side="left", padx=(0, 8))
+            ttk.Button(actions, text=label, command=action, style="Primary.TButton" if label == "保存并检查" else "Secondary.TButton").pack(side="left", padx=(0, 8))
 
     def _apply(self):
         preview = self.preview_result
@@ -760,6 +641,7 @@ class App:
         self._update_preview_note()
         self.correct_button.configure(state="disabled")
         self._render_table(result["payload"], result.get("rename_plan"), result.get("corrections"))
+        self._update_metrics(result["payload"], result.get("total"), result.get("corrections"))
         outcome = "处理完成，逐分金额验证通过。" if result["status"] == "completed" else "无需处理，未改动文件。" if result["status"] == "no_change" else "处理未完成。"
         parts = [outcome]
         if result.get("error"):
