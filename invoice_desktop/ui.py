@@ -51,9 +51,7 @@ def configure_theme(root):
         style.map(f"{name}.TButton", background=[("disabled", "#f0f3f7"), ("pressed", "#dbe6fa" if name != "Primary" else "#194bb7"), ("active", "#edf3ff" if name != "Primary" else PALETTE["blue_hover"])], foreground=[("disabled", "#9aa5b5")], bordercolor=[("disabled", "#e0e6ee")])
     style.configure("TEntry", fieldbackground="#fafbfd", foreground="#53637b", bordercolor="#d9e1eb", lightcolor="#d9e1eb", darkcolor="#d9e1eb", padding=(8, 5))
     style.map("TEntry", bordercolor=[("focus", "#8caff7")], fieldbackground=[("disabled", "#f0f3f7")])
-    style.configure("TNotebook", background=PALETTE["background"], borderwidth=0, tabmargins=(0, 0, 0, 0))
-    style.configure("TNotebook.Tab", background=PALETTE["surface"], foreground="#62718a", padding=(18, 7), borderwidth=0)
-    style.map("TNotebook.Tab", background=[("selected", "#eaf1ff"), ("active", "#f4f7fc")], foreground=[("selected", PALETTE["blue"])])
+    configure_navigation(root, style)
     style.configure("Treeview", rowheight=30, font=(FONT, 9), background=PALETTE["surface"], fieldbackground=PALETTE["surface"], foreground="#445570", borderwidth=0)
     style.configure("Treeview.Heading", font=(FONT, 9, "bold"), padding=(8, 6), background="#f2f5f9", foreground="#53647c", borderwidth=0, relief="flat")
     style.map("Treeview", background=[("selected", PALETTE["selected"])], foreground=[("selected", "#17315c")])
@@ -61,6 +59,47 @@ def configure_theme(root):
     style.configure("Vertical.TScrollbar", background="#c1ccda", troughcolor="#f4f6fa", borderwidth=0, arrowsize=12)
     style.configure("Horizontal.TScrollbar", background="#c1ccda", troughcolor="#f4f6fa", borderwidth=0, arrowsize=12)
     style.configure("Horizontal.TProgressbar", background=PALETTE["blue"], troughcolor="#e8edf5", borderwidth=0, thickness=3)
+
+
+def configure_navigation(root, style):
+    """Replace the themed tab border with a white surface and fixed bottom line."""
+    element = "InvoiceNavigation.tab"
+    if element not in style.element_names():
+        images = {}
+        for state, background, selected in (
+            ("normal", PALETTE["surface"], False),
+            ("selected", PALETTE["surface"], True),
+            ("active", "#f4f7fc", False),
+            ("selected_active", "#f4f7fc", True),
+        ):
+            image = tk.PhotoImage(master=root, width=2, height=8)
+            image.put(background, to=(0, 0, 2, 8))
+            if selected:
+                image.put(PALETTE["blue"], to=(0, 5, 2, 8))
+            images[state] = image
+        # Tk style stores image names; Python must keep the actual images alive.
+        root._navigation_images = images
+        style.element_create(element, "image", images["normal"],
+                             ("selected", "active", images["selected_active"]),
+                             ("selected", images["selected"]), ("active", images["active"]),
+                             border=(0, 0, 0, 3), padding=(0, 0, 0, 3), sticky="nswe")
+    style.configure("Underline.TNotebook", background=PALETTE["surface"], borderwidth=0,
+                    bordercolor=PALETTE["surface"], lightcolor=PALETTE["surface"],
+                    darkcolor=PALETTE["surface"], tabmargins=(18, 0, 18, 0))
+    style.configure("Underline.TNotebook.Tab", background=PALETTE["surface"], foreground="#62718a",
+                    font=(FONT, 9), padding=(14, 8, 14, 8), expand=(0, 0, 0, 0),
+                    focusthickness=1, focuscolor="#93b4ff")
+    style.map("Underline.TNotebook.Tab", foreground=[("disabled", "#9aa5b5"), ("selected", PALETTE["blue"])],
+              font=[("selected", (FONT, 9, "bold"))],
+              padding=[("selected", (14, 8, 14, 8))], expand=[("selected", (0, 0, 0, 0))])
+    style.layout("Underline.TNotebook", [("Notebook.client", {"sticky": "nswe"})])
+    style.layout("Underline.TNotebook.Tab", [(element, {"sticky": "nswe", "children": [
+        ("Notebook.padding", {"sticky": "nswe", "children": [
+            ("Notebook.focus", {"sticky": "nswe", "children": [
+                ("Notebook.label", {"sticky": "nswe"}),
+            ]}),
+        ]}),
+    ]})])
 
 
 def surface(parent, *, background=None, padding=0):
@@ -141,7 +180,7 @@ def build_interface(app, *, execution_steps, necessary_conditions, process_notic
     ttk.Label(brand, text="先预览，再执行 · 逐分复核金额", style="Subtitle.TLabel").pack(anchor="w")
     ttk.Label(header, text=f"V{__version__}", style="Version.TLabel").pack(side="right")
     ttk.Label(header, text="离线处理", style="Subtitle.TLabel").pack(side="right", padx=(0, 16))
-    tabs = ttk.Notebook(outer)
+    tabs = ttk.Notebook(outer, style="Underline.TNotebook")
     tabs.pack(fill="both", expand=True)
     process = ttk.Frame(tabs, padding=(12, 10))
     rules = ttk.Frame(tabs, padding=(16, 14))
@@ -297,7 +336,7 @@ def build_rules(app, parent, boundary_guide, retained_features):
     source_status = ttk.Label(source_panel, textvariable=app.source_status, style="Muted.TLabel", wraplength=1050, justify="left")
     source_status.pack(anchor="w", fill="x", pady=(5, 0))
     source_panel.bind("<Configure>", lambda event: source_status.configure(wraplength=max(180, event.width - 32)))
-    app.rule_tabs = ttk.Notebook(parent)
+    app.rule_tabs = ttk.Notebook(parent, style="Underline.TNotebook")
     app.rule_tabs.pack(fill="both", expand=True)
     boundary_tab = ttk.Frame(app.rule_tabs, padding=8)
     app.update_tab = ttk.Frame(app.rule_tabs, padding=8)

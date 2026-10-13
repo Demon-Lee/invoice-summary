@@ -144,3 +144,12 @@
 - 发布前两次确认原程序未运行，检查绝对路径、重解析点、原规则选择和暂存 EXE 哈希。1.1.1 已放回 `D:\Workspace\发票专题\invoice-desktop\release\InvoiceSummary`；旧文件夹保存为 `release/InvoiceSummary-1.0.0-archive`。发布与构建 EXE SHA256 同为 `cd0235c5ab1c906bae38f3685ecd18ca5b03c29b145a35ad3e6aa5d891dd6568`；使用说明及功能边界说明均为 1.1.1。
 - 实现提交为 `2f134e8`。从实际发布目录生成 `发票汇总助手-1.1.1-Windows.zip`（40,677,215 字节、1308 项）与源码 ZIP（98 项）。ZIP 内 EXE 与发布目录相同，两版规则逐文件哈希与清单匹配，说明版本正确；源码逐项与 Git 跟踪的当前文件一致。校验值写入 `release/SHA256.json`，完成记录提交后重新打包，使源码包含最终记录。
 - 本地浏览器设计预览及 docs/design/business-ui-preview.jpg 已更新 V1.1.1 标记；它们使用明确标注的示例数据，不是原生软件运行截图。本次未新增或运行测试，未启动原生 GUI、诊断、同步／导入接口检查或 PDF／Excel 流程，未写入业务文件。原生最小窗口、Windows 缩放、长文本校正及真实业务流程未经运行验证；构建、浏览器效果图和静态审查不代表原生运行通过。
+
+## 1.1.2：实际导航与已批准预览样式对应
+
+- 用户实际截图显示主导航仍有传统凸起矩形边框，与预览中的白底蓝色下划线不符。1.1.1 仅配置颜色及 borderwidth，仍使用默认 Notebook.tab 布局，clam 的选中 padding 也可继承；确认属于实现差异。
+- 新增 configure_navigation，四个 Tk PhotoImage 表示白底、悬停、选中蓝线和选中悬停。底部 3px 固定边界参与拉伸布局，图片由 root 持有；显式 Underline.TNotebook.Tab 布局替换旧 Notebook.tab，并覆盖 padding／expand。主导航及规则页内部导航均指定同一新样式，保留原生 Notebook、client、focus、label、页面父子关系与 add/select 接口。
+- 变更仅限 ui.py、版本及用户说明。App、识别、controller、updates、写表、校正和 engine 无差异；没有改 skill 或业务文件。软件版本为 1.1.2，右上角动态显示；当前规则仍为 `6b9e6cdafb3f`，上一规则 `42334e9f238e`。
+- 独立只读复审核对状态参数、本地 Python ttk 格式化、图片边界、引用生命周期、原生页签和选择接口，未发现 Critical / Important / Minor。两文件静态语法编译与 diff 空白检查通过，Windows 目录版构建退出 0；只读读取编译归档确认 1.1.2 和两个自定义样式已进入构建，未执行模块。
+- 两快照实际文件哈希与清单匹配，使用说明和边界说明为 1.1.2。发布前两次确认原程序未运行，并核对绝对路径、重解析点、规则状态及暂存 EXE；新版已放回 `D:\Workspace\发票专题\invoice-desktop\release\InvoiceSummary`，旧版保存为 `release/InvoiceSummary-1.1.1-archive`。发布与构建 EXE SHA256 同为 `8817761976fa53b2a07260c82c6a8d7509ed81900e82e0e826e8d0776ef1477f`。
+- 本次没有新增或运行测试，没有启动 GUI、诊断、同步／导入接口或实际 PDF／Excel 流程。实际下划线、焦点及缩放后的显示效果未经运行截图确认；静态复审和构建不等于视觉运行验证。
