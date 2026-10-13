@@ -37,7 +37,7 @@ Files: `invoice_desktop/app.py`, `invoice_desktop/__init__.py`, `README.md`, `ä½
 
 Files: this plan and `docs/release-checks.md`; release directory and archives.
 
-- [ ] Obtain independent read-only review and address substantive findings.
-- [ ] Build and inspect retained recognition/version and all portable assets; commit implementation.
-- [ ] Publish safely to original portable folder, preserve old release ZIP/directory, package actual folder.
-- [ ] Record evidence and unverified runtime aspects, commit final records and regenerate source package.
+- [x] Obtain independent read-only review and address substantive findings. Final review of `23ba1fc â†’ dcbfc30` found no remaining Critical / Important / Minor.
+- [x] Build and inspect retained recognition/version and all portable assets; commit implementation. Final rebuild exited 0 and retained `42334e9f238e`.
+- [x] Publish safely to original portable folder, preserve old release ZIP/directory, package actual folder. Previous folder retained as `release/InvoiceSummary-0.1.5-archive`; existing ZIP also remains.
+- [x] Record evidence and unverified runtime aspects, commit final records and regenerate source package.
