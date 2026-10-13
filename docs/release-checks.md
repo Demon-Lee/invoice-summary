@@ -195,4 +195,5 @@
 - 软件版本及两份当前说明为 1.1.6，当前数字右对齐描述已替换。App、ui_widgets、业务模块、engine、skill 与业务文件无修改。独立只读复审 8bb6ac2 → 最新工作区无 Critical / Important / Minor，确认没有后续对齐覆盖，比例组件仅写宽度。
 - 两个变更 Python 静态语法编译及 diff 空白检查通过，Windows 目录版构建退出 0。只读提取编译归档，版本为 1.1.6；ui.py 的递归代码签名与已审查的当前源码编译结果一致，未执行模块代码。当前规则保留 6b9e6cdafb3f、上一版 42334e9f238e，两份快照及源 skill 共享文件哈希匹配。
 - 发布前两次检查原路径程序未运行，核对绝对路径、重解析点、原 EXE、暂存 EXE 与规则文件；1.1.6 已放回 D:\Workspace\发票专题\invoice-desktop\release\InvoiceSummary。旧目录保留为 release/InvoiceSummary-1.1.5-archive，旧 ZIP 保留。构建／暂存／发布 EXE SHA256 同为 2b8f28b94b93891fe868b6602125e48c0fcffae2317ceccfdd3c5a357142bd9c。
+- 实现提交 25a860e。从实际发布目录生成发票汇总助手-1.1.6-Windows.zip（40,687,805 字节、1308 项）及源码 ZIP（108 项），逐成员字节与发布文件／Git 跟踪源码一致，EXE、规则快照哈希及两份说明匹配，无业务 PDF／工作簿。Windows ZIP SHA256 为 524eed184ff6792e84a4210b68499c9b4a49494ca701b4327b0fe6238d4b1272，校验值记录于 release/SHA256.json；记录提交后重新包装源码，包含最终文档。
 - 本次未新增或运行测试，未启动 GUI、诊断、同步／导入接口或 PDF／Excel 流程。实际显示效果未经运行确认；静态复审、编译归档和构建不等于视觉运行验证。

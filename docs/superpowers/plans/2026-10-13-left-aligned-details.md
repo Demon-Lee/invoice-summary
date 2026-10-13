@@ -22,4 +22,4 @@ app.tree.column(name, width=minimum, minwidth=minimum, anchor="w", stretch=False
 - [x] 版本 1.1.6，README 与使用说明删除当前数字右对齐描述，改为表头和明细全部左对齐；边界说明随构建更新版本。
 - [x] 两个 Python 静态 compile 与 diff 空白检查，独立只读复审无 Critical / Important / Minor，确认列比例／数据／业务不改。
 - [x] 核对原规则，检查构建目标与重解析点，原 tools/build.ps1 退出 0；读取归档确认版本、左对齐及源码字节码一致，说明／快照哈希匹配。
-- [ ] 两次检查软件未运行，暂存并核对 EXE／规则／原版本，归档 1.1.5 并更新原目录；提交及打包，逐成员核对发布／源码字节和校验值；记录提交后重新包装并核对最终源码，Git 状态干净。
+- [x] 两次检查软件未运行，暂存并核对 EXE／规则／原版本，归档为 InvoiceSummary-1.1.5-archive 并更新原目录。实现提交 25a860e，Windows 包 1308 项、源码 108 项，逐成员核对发布／源码字节和校验值；记录提交后重新包装并核对最终源码，Git 状态干净。
