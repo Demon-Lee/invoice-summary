@@ -21,5 +21,5 @@
 - [x] 修改 `invoice_desktop/workbook.py`：限定清空范围，保存及恢复右侧区域，更新计数、恢复匹配、公式转换及保存复验。
 - [x] 修改 `invoice_desktop/app.py`、`policy.py`、`__init__.py`、README 与使用说明：显示主表清空／右侧保留范围，版本为 0.1.7。
 - [x] 独立只读审查并解决重要问题，记录到 `docs/release-checks.md`。
-- [ ] 使用 `tools/build.ps1` 构建，安全替换原发布目录，保留原便携规则。
-- [ ] 使用 `tools/package_release.py` 从实际发布目录生成 0.1.7 Windows 与源码包，检查资产和版本、记录发布证据。
+- [x] 使用 `tools/build.ps1` 构建，安全替换原发布目录，保留原便携规则。
+- [x] 使用 `tools/package_release.py` 从实际发布目录生成 0.1.7 Windows 与源码包，检查资产和版本、记录发布证据。
