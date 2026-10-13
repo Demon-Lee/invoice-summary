@@ -186,4 +186,5 @@
 - 独立只读复审 2d8219f → 最新工作区，结合本机 Tcl treeview.tcl 核对 native drop 顺序、比例算法与下限、回调和既有接口；修正后无剩余 Critical / Important / Minor。三个变更 Python 静态编译和 diff 空白检查通过。软件版本及两份用户说明为 1.1.5；App、业务模块、engine、skill 和业务文件无修改。
 - 修正后重新构建 Windows 目录版退出 0，便携准备保留原目录规则。只读提取最终编译归档确认新类、十列参数与拖动前后比较均进入构建，ui 与 ui_widgets 的递归代码签名（字节码、名称、变量、常量）与当前源码编译结果一致，未执行模块。当前规则仍为 6b9e6cdafb3f、上一版 42334e9f238e，两个快照及源 skill 共享文件哈希匹配。
 - 两次确认原路径程序未运行，并核对绝对目标、重解析点、旧 EXE、暂存规则与新 EXE。1.1.5 已放回 D:\Workspace\发票专题\invoice-desktop\release\InvoiceSummary，旧 1.1.4 文件夹保留为 release/InvoiceSummary-1.1.4-archive，旧 ZIP 保留。最终构建／暂存／发布 EXE SHA256 为 edac305586da5aec498058f72a6bf9a100c2b0dfe3938c9a01ca29c93b15ccaa。
+- 实现提交 b2c1aaf。从实际发布目录生成发票汇总助手-1.1.5-Windows.zip（40,689,029 字节、1308 项）和源码 ZIP（106 项），包内每个成员字节与发布文件／Git 跟踪源码对应，EXE、两规则快照和说明匹配，未包含业务 PDF 或工作簿。Windows ZIP SHA256 为 bd615fb97fdf53ea301c9653e7e4dbdfca012f7b02133f549a9ef1a743815982，校验值记录在 release/SHA256.json；记录提交后重新包装源码，包含最终文档。
 - 本次未新增或运行测试，未启动 GUI、诊断、同步／导入接口或实际 PDF／Excel 流程。实际窗口缩放、手动拖动、Windows DPI 和截图对应显示尚未运行确认；静态复审和构建不等于视觉或交互运行验证。
