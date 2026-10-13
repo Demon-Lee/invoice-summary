@@ -175,4 +175,5 @@
 - 原发布目录仍不存在，核对保留的 1.1.3 Windows ZIP SHA256 65c702d03257a55c8edf712cda05db56fb974b182c127ac9bae8b5a17bad3985，仅将规则状态及白名单快照恢复至忽略目录，并逐文件校验清单哈希。构建沿用原 release_assets、PyInstaller 参数及 prepare_portable，以该已核对目录为 preserve 来源，没有回退到本机旧规则。
 - Windows 构建退出 0；只读提取编译归档确认版本 1.1.4、三列伸缩集合与 minwidth／stretch 变更。归档 build_interface 字节码与当前源码编译结果对应，未执行模块代码。当前规则保持 6b9e6cdafb3f、上一规则 42334e9f238e，两份快照及源 skill 共享文件哈希一致。
 - 发布前两次确认原路径程序未运行，检查绝对目标、重解析点、暂存 EXE 与规则状态。原目录仍缺失，已将 1.1.4 放回 D:\Workspace\发票专题\invoice-desktop\release\InvoiceSummary，旧 ZIP 保留。构建／暂存／发布 EXE SHA256 同为 fbc5875c6afaff7c8aced7c2a968486db7e32995283747a5e1a7d44849717a24，两份说明为 1.1.4。
+- 实现提交 8f97552。从实际发布目录生成发票汇总助手-1.1.4-Windows.zip（40,686,029 字节、1308 项）及源码 ZIP（104 项），逐成员读取字节对应发布文件／Git 跟踪源码，包内 EXE、规则快照哈希与说明版本匹配，无业务 PDF／工作簿。Windows ZIP SHA256 为 5745bc7507f90ead890d13ae3a6687f27d262b5aeddb4e3329ab18305ba2a271，校验值在 release/SHA256.json；记录提交后重新包装源码，使其包含最终文档。
 - 本次未新增或运行测试，未启动 GUI、诊断、同步／导入接口或实际 PDF／Excel 流程。全屏、Windows 缩放、手动调整与窄窗口显示尚未运行确认；静态审查、编译归档与构建不等于界面运行验证。

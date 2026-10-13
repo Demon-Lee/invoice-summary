@@ -35,4 +35,4 @@ Files: dist、release（忽略目录）；docs/release-checks.md。
 - [x] 原目录不存在，核对 1.1.3 ZIP SHA256、快照白名单及各文件哈希，仅恢复规则到 .superpowers 下的新目录。
 - [x] 执行 release_assets.py 和原 PyInstaller 命令；prepare_portable.py --preserve 指向已核对来源，复制两份说明和许可。读取编译归档确认版本和新列参数；核对规则和 EXE 哈希。
 - [x] 原程序未运行时将构建复制至 release 下唯一暂存目录；再次核对 EXE／规则、进程及目标状态，原目录缺失，直接重建原目录；保留旧 ZIP。
-- [ ] 提交实现、从实际发布目录生成两份 ZIP，读取每个成员与发布／跟踪源码逐字节对应，核对规则及 SHA256.json，记录并提交；再包装并核对最终源码，Git 状态干净。
+- [x] 实现提交 8f97552；从实际发布目录生成两份 ZIP，每个成员与发布／跟踪源码逐字节对应，规则及 SHA256.json 一致。Windows 1308 项，源码 104 项；记录提交后重新包装并核对最终源码，Git 状态干净。
