@@ -112,3 +112,9 @@
 - 发布前两次检查程序未运行，核对当前原目录的规则选择与构建一致；0.1.8 已放回 `D:\Workspace\发票专题\invoice-desktop\release\InvoiceSummary`。旧 0.1.7 文件夹保留于 `release/InvoiceSummary-0.1.7-archive`，旧 ZIP 保留。
 - 已从实际发布目录打包 `发票汇总助手-0.1.8-Windows.zip`（40,629,128 字节、1302 项）及源码 ZIP（91 项），SHA256 记录于 `release/SHA256.json`。Windows ZIP 的 EXE 与发布目录相同，0.1.8 使用说明、功能边界及便携规则齐全；源码包含模板规则解释器和本次规格／计划。文档提交后重新包装源码，保持内容与最终提交一致。
 - 本次没有新增或运行测试，没有执行同步、导入、回退、更新接口行为检查、GUI、写表或实际 PDF／Excel 流程；未修改业务文件。构建与静态核对不表示实际同步和发票处理已通过运行验证。
+
+### 0.1.8 后续：按用户要求同步本机 skill
+
+- 用户明确要求代为同步。确认原发布目录程序未运行，调用与界面相同的 EngineStore.sync，同步来源 `C:\Users\aaa\.agents\skills\summarize-invoice-pdfs` 到 `release/InvoiceSummary/recognition`；同步必需的依赖／接口检查完成，退出码 0。
+- 当前共享规则从 `42334e9f238e` 更新到 `6b9e6cdafb3f`，清单格式 3。读取激活快照确认 JSON 模板规则已携带，源规则与激活版本完全相同，无待同步文件；旧规则作为上一版保留。本机来源绑定与规则版本按软件原设置方式保存。
+- 从已同步的原发布文件夹重新生成 0.1.8 Windows 压缩包，包含当前规则及回退快照，校验值更新至 release/SHA256.json。没有执行实际发票处理、改名或修改业务工作簿。
