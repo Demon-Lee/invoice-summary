@@ -30,5 +30,5 @@ Files: `docs/release-checks.md`, this plan, `release/InvoiceSummary` and release
 
 - [x] Obtain independent read-only review through requesting-code-review and address substantive findings. Final review found no remaining Critical / Important; both Minor findings addressed.
 - [x] Build, confirm portable engine/version and required files, and commit source changes.
-- [ ] Safely publish to the existing application path, retaining any previous release directory or existing ZIP, and package from the actual published directory.
-- [ ] Record evidence and runtime limitations, commit documentation, and regenerate final source package.
+- [x] Safely publish to the existing application path, retaining any previous release directory or existing ZIP, and package from the actual published directory. The previous directory was absent; its 0.1.4 ZIP remains preserved.
+- [x] Record evidence and runtime limitations, commit documentation, and regenerate final source package.
