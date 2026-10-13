@@ -5,7 +5,6 @@ import os
 import re
 import tempfile
 import warnings
-from collections import defaultdict, deque
 from copy import copy
 from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation
@@ -113,10 +112,6 @@ def _rows(payload):
     return result
 
 
-def _key(row):
-    return row["sequence"], row["product_name"], row["spec"]
-
-
 def _existing(ws, columns, row_number):
     get = lambda key: ws.cell(row_number, columns[key]).value
     sequence = number(get("序号"), f"{ws.title}第{row_number}行序号")
@@ -124,7 +119,7 @@ def _existing(ws, columns, row_number):
         raise ValueError(f"{ws.title} 第 {row_number} 行序号无效")
     result = dict(sequence=int(sequence),
                   product_name=text(get("产品名称")), spec=text(get("规格型号")), unit=text(get("单位")),
-                  quantity=number(get("数量") if text(get("数量")) else 1, "数量"),
+                  quantity=number(get("数量"), "数量"),
                   amount=number(get("金额"), "金额", cents=True))
     if "生产厂家" in columns:
         result["manufacturer"] = text(get("生产厂家"))
@@ -132,13 +127,72 @@ def _existing(ws, columns, row_number):
 
 
 def _populated(ws, row):
-    return any(text(c.value) for c in ws[row])
+    return any(text(c.value) or c.comment is not None or c.hyperlink is not None for c in ws[row])
+
+
+def _matches_sheet(ws, header, columns, footer, rows):
+    """Recognize an already-written pending refill, without authorizing normal skips."""
+    if footer != header + len(rows) + 1:
+        return False
+    for r, expected in enumerate(rows, header + 1):
+        for label in ("序号", "数量", "金额"):
+            cell = ws.cell(r, columns[label])
+            if cell.data_type != "n" or cell.value is None or isinstance(cell.value, bool):
+                return False
+        for label in ("产品名称", "规格型号", "单位", "生产厂家"):
+            if label in columns:
+                cell = ws.cell(r, columns[label])
+                if cell.value is not None and cell.data_type != "s":
+                    return False
+        try:
+            existing = _existing(ws, columns, r)
+            if any(existing[key] != expected[key] for key in existing):
+                return False
+            price = ws.cell(r, columns["单价"])
+            if ws.title == "验收":
+                if price.data_type != "f" or price.value != f"={get_column_letter(columns['金额'])}{r}/{get_column_letter(columns['数量'])}{r}":
+                    return False
+            elif price.data_type != "n" or price.value is None or isinstance(price.value, bool) or not math.isclose(float(number(price.value, "单价")), _excel_number(expected["amount"] / expected["quantity"], "单价"), rel_tol=1e-12, abs_tol=0):
+                return False
+        except (ValueError, TypeError, OverflowError, InvalidOperation):
+            return False
+        for cell in ws[r]:
+            if cell.comment is not None or cell.hyperlink is not None:
+                return False
+            if cell.column not in columns.values() and cell.value is not None:
+                return False
+    for label in ("数量", "金额"):
+        letter = get_column_letter(columns[label])
+        cell = ws.cell(footer, columns[label])
+        if cell.data_type != "f" or cell.value != f"=SUM({letter}{header+1}:{letter}{footer-1})":
+            return False
+    return True
 
 
 def _shift_rows(ws, start, delta):
     """openpyxl does not shift merge/dimension/print metadata by itself."""
     if not delta:
         return
+    unsupported = []
+    for present, label in ((ws.tables, "Excel 表格"), (ws.auto_filter.ref, "自动筛选区域"),
+                           (ws.conditional_formatting, "条件格式"),
+                           (ws.data_validations and ws.data_validations.dataValidation, "数据验证"),
+                           (ws._charts, "图表"), (ws._images, "图片"), (ws._pivots, "透视表"),
+                           (ws.row_breaks.brk, "手动分页")):
+        if present:
+            unsupported.append(label)
+    if unsupported:
+        raise ValueError(f"{ws.title} 需要增减明细行，但包含无法安全随行移动的结构：{'、'.join(unsupported)}，请调整模板")
+    affected = min(start, start + delta)
+    if ws.print_title_rows:
+        title_rows = str(ws.print_title_rows).rsplit("!", 1)[-1]
+        match = re.fullmatch(r"\$?([1-9][0-9]*):\$?([1-9][0-9]*)", title_rows)
+        if match is None or int(match[2]) >= affected:
+            raise ValueError(f"{ws.title} 重复打印行涉及待移动区域，请调整模板")
+    if ws.freeze_panes and CellRange(str(ws.freeze_panes)).max_row >= affected:
+        raise ValueError(f"{ws.title} 冻结窗格涉及待移动区域，请调整模板")
+    if any(cell.hyperlink is not None for row in ws.iter_rows(min_row=affected) for cell in row):
+        raise ValueError(f"{ws.title} 超链接涉及待移动区域，请调整模板")
     merges = [copy(rng) for rng in ws.merged_cells.ranges if rng.min_row >= start]
     if any(rng.min_row < start <= rng.max_row for rng in ws.merged_cells.ranges):
         raise ValueError(f"{ws.title} 合并单元格跨越移动区域")
@@ -188,7 +242,7 @@ def _remap_formula(value, sheet, row_maps):
                 row = int(match[2])
                 moved = row_maps.get(target_sheet, {}).get(row, row)
                 if moved is None:
-                    raise ValueError(f"{sheet} 公式引用待删除的空行，无法安全移动：{value}")
+                    raise ValueError(f"{sheet} 公式引用待移除的明细行，无法安全移动：{value}")
                 mapped.append(match[1] + str(moved))
             elif re.fullmatch(r"\$?[A-Za-z]{1,3}", part) and len(parts) == 2:
                 mapped.append(part)
@@ -207,9 +261,11 @@ class WorkbookPlan:
     total: Decimal
     sheet_details: dict
     rows_to_correct: int = 0
+    rows_to_fill: int = 0
+    workbook_matches: bool = False
 
 
-def plan_workbook(path, payload, run_date=None, original_payload=None, corrected_workbook=False):
+def plan_workbook(path, payload, run_date=None):
     path = Path(path).resolve()
     if path.suffix.lower() != ".xlsx" or not path.is_file():
         raise ValueError("请选择现有的 .xlsx 工作簿")
@@ -224,106 +280,38 @@ def plan_workbook(path, payload, run_date=None, original_payload=None, corrected
         if missing:
             raise ValueError("缺少工作表：" + "、".join(sorted(missing)))
         rows = _rows(payload)
-        before_rows = {}
-        if original_payload is not None:
-            originals = [raw for record in original_payload.get("records", []) for raw in record.get("rows", [])]
-            if len(originals) != len(rows):
-                raise ValueError("人工校正不能改变明细条数")
-            for index, (raw, expected) in enumerate(zip(originals, rows)):
-                if number(raw.get("sequence"), "原始序号") != expected["sequence"]:
-                    raise ValueError("人工校正不能改变发票序号")
-                try:
-                    before = {key: text(raw.get(key)) for key in ("product_name", "spec", "unit", "manufacturer")}
-                    before.update(sequence=expected["sequence"], quantity=number(raw.get("quantity") if text(raw.get("quantity")) else 1, "原始数量"), amount=number(raw.get("amount"), "原始金额", cents=True))
-                except ValueError:
-                    continue
-                if before != expected:
-                    before_rows[index] = before
+        if not rows:
+            raise ValueError("没有可重填的发票明细，未清空工作簿")
         day = run_date or datetime.date.today()
         date_text = f"{day.year}.{day.month}.{day.day}"
-        removed, details, added_counts, correction_counts = {}, {}, [], []
+        removed, details, added_counts, matching = {}, {}, [], []
         formulas = [(ws.title, c.row, c.column, c.value) for ws in wb for row in ws for c in row if c.data_type == "f"]
-        row_maps, regenerated = {}, set()
+        row_maps, regenerated, discarded = {}, set(), set()
         for name in SIGNERS:
             ws = wb[name]
             header, columns, footer, date_col = inspect_sheet(ws)
             original_footer, original_max_row = footer, ws.max_row
             template_row = header + 1
+            if template_row >= footer:
+                raise ValueError(f"{name} 缺少可继承格式的明细行，请使用含空白明细行的模板")
             template_styles = [copy(c._style) for c in ws[template_row]]
             template_height = ws.row_dimensions[template_row].height
-            desired = defaultdict(deque)
-            for index, row in enumerate(rows):
-                desired[_key(row)].append(index)
-            matched = set()
-            last_content = header
-            destinations = {}
-            metadata = {}
-            corrected_count = 0
-            for r in range(header+1, footer):
-                if _populated(ws, r):
-                    last_content = r
-                if not any(text(ws.cell(r, columns[k]).value) for k in columns):
-                    continue
-                existing = _existing(ws, columns, r)
-                candidate = desired[_key(existing)]
-                if original_payload is None:
-                    if not candidate:
-                        raise ValueError(f"{name} 第 {r} 行与完整 PDF 目录存在冲突：已有明细未找到对应发票")
-                    index = candidate.popleft()
-                else:
-                    candidates = sorted(set(candidate) | {i for i, before in before_rows.items() if _key(before) == _key(existing)})
-                    before_matching = [i for i in candidates if i not in matched and all(existing[key] == before_rows.get(i, rows[i])[key] for key in existing)]
-                    after_matching = [i for i in candidates if i not in matched and all(existing[key] == rows[i][key] for key in existing)]
-                    matching = (after_matching or before_matching) if corrected_workbook else (before_matching or after_matching)
-                    if not matching:
-                        raise ValueError(f"{name} 第 {r} 行与原识别值和校正值均不一致，未执行覆盖")
-                    if len(matching) > 1 and any(any(rows[i][key] != rows[matching[0]][key] for key in existing) for i in matching[1:]):
-                        raise ValueError(f"{name} 第 {r} 行有多个不同的校正目标，无法唯一对应明细")
-                    index = matching[0]
-                expected = rows[index]
-                if any(existing[key] != expected[key] for key in existing):
-                    if index not in before_rows or any(existing[key] != before_rows[index][key] for key in existing):
-                        raise ValueError(f"{name} 第 {r} 行与发票业务字段冲突，未执行覆盖")
-                    corrected_count += 1
-                matched.add(index)
-                destinations[index] = r
-                metadata[index] = ([tuple((copy(c.value), copy(c._style), copy(c.hyperlink), copy(c.comment), c.data_type)) for c in ws[r]], copy(ws.row_dimensions[r]))
-            new = [index for index in range(len(rows)) if index not in matched]
-            added_counts.append(len(new))
-            correction_counts.append(corrected_count)
-            expansion = max(0, len(new) - (footer-last_content-1))
+            matching.append(_matches_sheet(ws, header, columns, footer, rows))
+            old_count = sum(_populated(ws, r) for r in range(header+1, footer))
+            added_counts.append(max(0, len(rows) - old_count))
+            discarded.update((name, r, col) for sheet, r, col, value in formulas if sheet == name and header < r < original_footer)
+            expansion = max(0, len(rows) - (footer-header-1))
             _shift_rows(ws, footer, expansion)
             footer += expansion
-            for index in new:
-                last_content += 1
-                destinations[index] = last_content
-                ws.row_dimensions[last_content].height = template_height
-                for col, style in enumerate(template_styles, 1):
-                    ws.cell(last_content, col)._style = copy(style)
-            slots = sorted(destinations.values())
-            if not new and [destinations[i] for i in range(len(rows))] != slots:
-                raise ValueError(f"{name} 已有明细顺序与原始发票存在冲突")
-            original_destinations = dict(destinations)
-            destinations = dict(enumerate(slots))
-            row_maps[name] = {original_destinations[i]: destinations[i] for i in matched}
-            for index, r in destinations.items():
-                row = rows[index]
-                if index in metadata:
-                    cells, row_dimension = metadata[index]
-                    row_dimension.index = r
-                    ws.row_dimensions[r] = row_dimension
-                    for col, (value, style, hyperlink, comment, data_type) in enumerate(cells, 1):
-                        cell = ws.cell(r, col)
-                        cell.value, cell._style = value, style
-                        cell.hyperlink, cell.comment, cell.data_type = hyperlink, comment, data_type
-                else:
+            for r in range(header+1, footer):
+                if r >= original_footer:
                     ws.row_dimensions[r].height = template_height
-                    for col in range(1, ws.max_column+1):
-                        cell = ws.cell(r, col)
-                        cell.value = None
-                        cell.hyperlink = cell.comment = None
-                        if col <= len(template_styles):
-                            cell._style = copy(template_styles[col-1])
+                    for col, style in enumerate(template_styles, 1):
+                        ws.cell(r, col)._style = copy(style)
+                for cell in ws[r]:
+                    cell.value = None
+                    cell.hyperlink = cell.comment = None
+            for r, row in enumerate(rows, header+1):
                 values = {"序号": row["sequence"], "产品名称": row["product_name"], "规格型号": row["spec"],
                           "单位": row["unit"], "数量": _excel_number(row["quantity"], "数量", exact=True), "金额": _excel_number(row["amount"], "金额", exact=True),
                           "生产厂家": row["manufacturer"]}
@@ -336,40 +324,36 @@ def plan_workbook(path, payload, run_date=None, original_payload=None, corrected
                     align = copy(cell.alignment)
                     align.horizontal = align.vertical = "center"
                     cell.alignment = align
-            last = max((r for r in range(header+1, footer) if _populated(ws, r)), default=header)
+            last = header + len(rows)
             count = footer-last-1
             removed[name] = count
             _shift_rows(ws, footer, -count)
             footer -= count
+            row_maps[name] = {r: r if r <= last else None for r in range(header+1, original_footer)}
             for r in range(original_footer, original_max_row+1):
                 row_maps[name][r] = r + footer - original_footer
-            # Removed original blank rows must not silently become invoice refs.
-            for r in range(header+1, original_footer):
-                if r not in row_maps[name] and r > last_content:
-                    row_maps[name][r] = None
-            for i in matched:
-                regenerated.add((name, original_destinations[i], columns["单价"]))
             for label in ("数量", "金额"):
                 regenerated.add((name, original_footer, columns[label]))
+            regenerated.add((name, original_footer+1, date_col))
             for label in ("数量", "金额"):
                 letter = get_column_letter(columns[label])
                 ws.cell(footer, columns[label], f"=SUM({letter}{header+1}:{letter}{footer-1})" if footer > header+1 else "=0")
             ws.cell(footer+1, date_col, date_text)
-            details[name] = {"headerRow": header, "footerRow": footer, "columns": columns, "rowsToAdd": len(new), "rowsToCorrect": corrected_count, "blankRowsToRemove": count}
+            details[name] = {"headerRow": header, "footerRow": footer, "columns": columns, "rowsToAdd": added_counts[-1], "rowsToCorrect": 0, "blankRowsToRemove": count, "oldRowsToClear": old_count, "rowsToFill": len(rows)}
             inspect_sheet(ws)
         moved = any(old != new for mapping in row_maps.values() for old, new in mapping.items())
         if moved:
-            if wb.defined_names:
+            if wb.defined_names or any(sheet.defined_names for sheet in wb):
                 raise ValueError("工作簿包含命名区域，当前无法安全随行移动，请调整模板")
             for name, row, col, formula in formulas:
-                if (name, row, col) in regenerated:
+                if (name, row, col) in regenerated or (name, row, col) in discarded:
                     continue
                 target_row = row_maps.get(name, {}).get(row, row)
                 if target_row is None or not isinstance(formula, str):
                     raise ValueError(f"{name} 公式无法安全随行移动")
                 wb[name].cell(target_row, col, _remap_formula(formula, name, row_maps))
         wb.calculation = CalcProperties(calcId=0, fullCalcOnLoad=True, forceFullCalc=True)
-        return WorkbookPlan(path, wb, max(added_counts), removed, sum((r["amount"] for r in rows), Decimal("0.00")), details, max(correction_counts))
+        return WorkbookPlan(path, wb, max(added_counts), removed, sum((r["amount"] for r in rows), Decimal("0.00")), details, rows_to_fill=len(rows), workbook_matches=all(matching))
     except Exception:
         wb.close()
         raise

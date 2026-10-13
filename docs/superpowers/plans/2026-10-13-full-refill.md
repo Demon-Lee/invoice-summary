@@ -21,26 +21,26 @@
 
 Files: `invoice_desktop/workbook.py`, `invoice_desktop/controller.py`.
 
-- [ ] Replace matching loops with full area clearing and sequential writes. Retain existing styles; copy first detail-row styles for expansion; move the unique footer to `header + len(rows) + 1` using `_shift_rows`.
-- [ ] Discard formulas in the cleared region, regenerate price and total formulas, and map retained formulas outside that region safely. Refuse empty rows and missing reusable data-row format.
-- [ ] Add `rows_to_fill` and `workbook_matches` to `WorkbookPlan` and `Preview`. Keep existing diagnostic count fields compatible; do not use them to decide whether a normal refill is needed.
-- [ ] Add a content matcher for exact sequential business fields, derived price, footer sums and absence of extra content/comments/hyperlinks; use it only for safe pending recovery.
-- [ ] Persist the refill policy and pre-write workbook hash. Detect the crash-before-phase-marker case for all runs; require a complete expected match before resuming that uncertain state. Existing old pending records remain readable.
-- [ ] Use `plan_workbook(book, payload)` in preview, correction and apply. Normal preview with valid rows always has changes; only an already-written, fully matched pending run may skip writing.
+- [x] Replace matching loops with full area clearing and sequential writes. Retain existing styles; copy first detail-row styles for expansion; move the unique footer to `header + len(rows) + 1` using `_shift_rows`.
+- [x] Discard formulas in the cleared region, regenerate price and total formulas, and map retained formulas outside that region safely. Refuse empty rows and missing reusable data-row format.
+- [x] Add `rows_to_fill` and `workbook_matches` to `WorkbookPlan` and `Preview`. Keep existing diagnostic count fields compatible; do not use them to decide whether a normal refill is needed.
+- [x] Add a content matcher for exact sequential business fields, derived price, footer sums and absence of extra content/comments/hyperlinks; use it only for safe pending recovery.
+- [x] Persist the refill policy and pre-write workbook hash. Detect the crash-before-phase-marker case for all runs; require a complete expected match before resuming that uncertain state. Existing old pending records remain readable.
+- [x] Use `plan_workbook(book, payload)` in preview, correction and apply. Normal preview with valid rows always has changes; only an already-written, fully matched pending run may skip writing.
 
 ## Task 2: Product guidance
 
 Files: `invoice_desktop/app.py`, `invoice_desktop/__init__.py`, `README.md`, `使用说明.txt`.
 
-- [ ] Bump version to 0.1.4 and replace incremental wording with full refill. Show old rows to clear and current rows to fill per sheet.
-- [ ] Explicitly state full PDF directory, cleared brand/remarks, retained template and current-preview manual corrections in top notice and help/docs.
-- [ ] Distinguish actual refill from a pending run that only resumes Excel/verification; show row reduction as detail-region resizing.
+- [x] Bump version to 0.1.4 and replace incremental wording with full refill. Show old rows to clear and current rows to fill per sheet.
+- [x] Explicitly state full PDF directory, cleared brand/remarks, retained template and current-preview manual corrections in top notice and help/docs.
+- [x] Distinguish actual refill from a pending run that only resumes Excel/verification; show row reduction as detail-region resizing.
 
 ## Task 3: Review and release
 
 Files: `docs/release-checks.md`, this plan, `release/InvoiceSummary` and release ZIPs.
 
-- [ ] Obtain independent read-only review via requesting-code-review and fix substantive findings without tests.
-- [ ] Build with `tools/build.ps1` using the existing build venv; confirm retained engine version and required files.
+- [x] Obtain independent read-only review via requesting-code-review and fix substantive findings without tests.
+- [x] Build with `tools/build.ps1` using the existing build venv; confirm retained engine version and required files.
 - [ ] Commit source changes; safely preserve old release, publish 0.1.4 to `release/InvoiceSummary`, and package from that exact directory using `tools/package_release.py`.
 - [ ] Record publication/build/review evidence and unperformed runtime checks, commit documentation, and regenerate the source package to include final records.

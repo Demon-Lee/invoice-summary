@@ -18,16 +18,16 @@ from .corrections import FIELDS, LABELS, field_value, normalize
 EXECUTION_STEPS = (
     "1. 选择完整批次的 PDF 文件夹和目标 .xlsx 工作簿。",
     "2. 点击“只读预览”；字段有误可双击明细人工校正。",
-    "3. 预览通过后点击“执行处理”，等待完成。",
+    "3. 预览通过后点击“执行处理”，清空旧明细并整批重填。",
     "4. 查看金额复核结果和临时文件清理状态。",
 )
 NECESSARY_CONDITIONS = (
     "Windows 10/11，已安装 Microsoft Excel 桌面版。",
-    "有文本层的电子 PDF；选择完整批次，不支持扫描件。",
+    "有文本层的电子 PDF；每次选择完整批次，旧明细全部替换。",
     "约定格式的 .xlsx，含“验收”“领用”、表头、日期与三行页脚。",
     "执行前关闭目标工作簿；软件和输入文件所在目录须可写。",
 )
-PROCESS_NOTICE = "执行会重命名 PDF，并直接更新原工作簿；不自动创建备份。"
+PROCESS_NOTICE = "执行会重命名 PDF，清空两表旧明细（含品牌、备注）后整批重填；原位更新，不自动备份。"
 HELP_HEADINGS = ("执行步骤", "必要条件", "人工校正", "工作簿详细要求", "处理与恢复", "识别原则", "规则更新与分发")
 HELP = "\n".join(("执行步骤", *EXECUTION_STEPS, "", PROCESS_NOTICE, "", "必要条件", *NECESSARY_CONDITIONS)) + """
 
@@ -36,13 +36,15 @@ HELP = "\n".join(("执行步骤", *EXECUTION_STEPS, "", PROCESS_NOTICE, "", "必
 
 校正只对本次预览有效，保存时不会改动 PDF、工作簿或 skill。重新发起普通预览会重新识别，需要再次校正。未完成执行的校正会随恢复记录保留，恢复期间固定使用该次校正。
 
-不支持增删明细或修改票面总额。漏项、多项、整票无法解析等结构问题仍需改进 skill。金额始终逐分核对，工作簿中不对应的内容不会被强制覆盖。
+不支持增删预览明细或修改票面总额。漏项、多项、整票无法解析等结构问题仍需改进 skill。金额始终逐分核对，正式填表使用本次预览及人工校正后的结果。
 
 工作簿详细要求
-工作簿须包含“验收”“领用”两张表，且各有完整表头、唯一三行页脚（合计、签字、说明）和日期标签。表内已有明细须在所选完整 PDF 批次中找到对应发票。
+工作簿须包含“验收”“领用”两张表，且各有完整表头、明细格式行、唯一三行页脚（合计、签字、说明）和日期标签。
+
+每次按完整批次重填：清空表头与合计之间全部明细内容，包括品牌、备注、其他手填内容、批注和超链接。保留表头、格式、签字和说明页脚，按当前明细数量调整数据区并重新计算单价及合计。PDF 目录中没有的旧明细将移除；旧表内人工修改不会保留。
 
 处理与恢复
-只读预览不会重命名 PDF，也不会保存工作簿。预览通过后才可执行：软件会改名、更新表格、设置字体、调用 Excel 重算，并逐票复核金额。出现重名、字段不确定、金额不一致或模板结构异常时停止，不提供强制覆盖。解决异常后重新预览。
+只读预览不会重命名 PDF，也不会保存或清空工作簿。预览通过后才可执行：软件会改名、清空旧明细并重填两表、设置字体、调用 Excel 重算，并逐票复核金额。出现重名、字段不确定、金额不一致或模板结构异常时停止。解决异常后重新预览。
 
 如果 Excel 操作或金额验证失败，解决原因后重新选择同一批次和工作簿进行只读预览，可继续未完成的处理。重启软件后仍可恢复；恢复期间请保持发票内容及识别版本一致。
 
@@ -355,20 +357,18 @@ class App:
         self.correct_button.configure(state="normal" if preview.payload.get("records") and not preview.resume_pending else "disabled")
         invoices = len(preview.payload.get("records", []))
         rows = sum(len(r.get("rows", [])) for r in preview.payload.get("records", []))
-        self.summary.set(f"{invoices} 张发票 · {rows} 条明细 · 本批合计 ¥{preview.total} · 新增 {preview.rows_to_add} 条 · 人工校正 {len(preview.corrections)} 条")
-        parts = [f"目标工作簿：{preview.workbook}（原位更新，不自动创建备份）", f"识别版本：{preview.engine_version}"]
+        self.summary.set(f"{invoices} 张发票 · 整批重填 {rows} 条明细 · 本批合计 ¥{preview.total} · 人工校正 {len(preview.corrections)} 条")
+        parts = [f"目标工作簿：{preview.workbook}（原位更新，不自动创建备份）", f"识别版本：{preview.engine_version}", "填表方式：清空两表全部旧明细（含品牌、备注），按本次完整批次重填。"]
         for name, details in preview.sheet_details.items():
-            parts.append(f"{name}：表头、字段映射、页脚与日期检查通过；待移除末尾空行 {details['blankRowsToRemove']} 行")
-            if details.get("rowsToCorrect"):
-                parts.append(f"{name}：将按人工校正更新已有明细 {details['rowsToCorrect']} 条。")
+            parts.append(f"{name}：模板检查通过；将清空旧明细 {details['oldRowsToClear']} 行，重填 {details['rowsToFill']} 条；缩减明细区 {details['blankRowsToRemove']} 行。")
         parts.extend(self._correction_lines(preview.original_payload, preview.corrections))
         parts.append("异常：\n" + "\n".join(preview.issues) if preview.issues else "异常：无；只读预览通过，尚未改动文件。")
         if preview.resume_pending:
-            parts.append("检测到上次处理未完成；本次将继续字体、重算和金额验证，缺失的改名或明细也会补齐。")
+            parts.append("检测到上次处理未完成；本次将继续字体、重算和金额验证。已重填且与预期完全对应的两表可跳过重复写入，否则按本次完整批次重填。")
             if preview.corrections:
                 parts.append("已恢复上次人工校正；请先完成该次运行，恢复期间不能修改校正。")
         if preview.clean and not preview.has_changes:
-            parts.append("没有新增、改名或多余末尾空行，无需处理。")
+            parts.append("没有可重填明细，无需处理。")
         self._set_text(self.report, "\n".join(parts))
         if preview.clean and preview.has_changes:
             self.execute.configure(state="normal")
@@ -498,8 +498,10 @@ class App:
             actual = result["rename_plan"]
             parts.append(f"实际改名：{sum(p['status']=='renamed' for p in actual)} 个；未完成：{sum(p['status']=='not_completed' for p in actual)} 个")
         totals = result.get("totals", {})
-        if result.get("blank_rows_removed"):
-            parts.append("实际移除末尾空行：" + "；".join(f"{name} {count} 行" for name, count in result["blank_rows_removed"].items()))
+        if result.get("rows_filled"):
+            parts.append(f"实际清空两表旧明细（含品牌、备注），每表重填 {result['rows_filled']} 条。")
+        if result.get("detail_rows_removed"):
+            parts.append("实际缩减明细区：" + "；".join(f"{name} {count} 行" for name, count in result["detail_rows_removed"].items()))
         if totals:
             parts.append(f"PDF 合计 ¥{result['total']} · 验收合计 ¥{totals.get('acceptance_footer_total')} · 领用合计 ¥{totals.get('issue_footer_total')}")
         if result.get("verification", {}).get("exceptions"):

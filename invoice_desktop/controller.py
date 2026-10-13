@@ -19,6 +19,8 @@ from .updates import read_manifest, sha256
 from .workbook import plan_workbook, write_workbook, number
 from .corrections import apply_corrections, row_changes
 
+WRITE_MODE = "replace-details-v1"
+
 
 def resource_root():
     return Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parents[1]))
@@ -91,7 +93,9 @@ class Preview:
     base_issues: list = field(default_factory=list)
     rows_to_correct: int = 0
     workbook_written: bool = False
-    manual_phase_uncertain: bool = False
+    write_phase_uncertain: bool = False
+    rows_to_fill: int = 0
+    workbook_matches: bool = False
 
     @property
     def clean(self):
@@ -99,7 +103,7 @@ class Preview:
 
     @property
     def has_changes(self):
-        return self.resume_pending or self.rows_to_add > 0 or self.rows_to_correct > 0 or any(self.blank_rows_to_remove.values()) or any(e.get("status") == "ready" for e in self.payload.get("rename_plan", []))
+        return self.resume_pending or self.rows_to_fill > 0 or any(e.get("status") == "ready" for e in self.payload.get("rename_plan", []))
 
 
 class Controller:
@@ -125,7 +129,9 @@ class Controller:
         state = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {
             "engine_version": preview.engine_version,
             "invoice_hashes": self._invoice_hashes(preview.fingerprints, preview.workbook),
-            "workbook_written": False}
+            "workbook_written": False,
+            "workbook_before_sha256": preview.fingerprints[str(preview.workbook)]}
+        state["write_mode"] = WRITE_MODE
         if workbook_written is not None:
             state["workbook_written"] = workbook_written
         if preview.corrections and "manual" not in state:
@@ -218,10 +224,15 @@ class Controller:
                         result.base_issues.append("上次处理未完成，请先回退到原识别版本再继续处理")
                     if state["invoice_hashes"] != self._invoice_hashes(before, book):
                         result.base_issues.append("上次处理未完成且发票内容或批次已变化，请恢复原批次后继续")
+                    if state.get("write_mode") not in (None, WRITE_MODE):
+                        result.base_issues.append("上次处理使用不同的写表策略，请使用原软件完成后再重填")
+                    before_hash = state.get("workbook_before_sha256") or (state.get("manual") or {}).get("workbook_before_sha256")
+                    if before_hash is not None and (not isinstance(before_hash, str) or len(before_hash) != 64 or any(c not in "0123456789abcdef" for c in before_hash)):
+                        raise ValueError("写表前内容哈希记录无效")
+                    if not result.workbook_written and before_hash is not None and before_hash != before[str(book)]:
+                        result.workbook_written = True
+                        result.write_phase_uncertain = True
                     if not result.base_issues and state.get("manual"):
-                        if not result.workbook_written and state["manual"]["workbook_before_sha256"] != before[str(book)]:
-                            result.workbook_written = True
-                            result.manual_phase_uncertain = True
                         self._restore_manual(result, state["manual"])
                         self._rebuild_rename(result)
                 except (OSError, ValueError, KeyError, TypeError) as exc:
@@ -269,7 +280,8 @@ class Controller:
 
     def _validate_preview(self, result):
         result.issues = list(result.base_issues)
-        result.rows_to_add = result.rows_to_correct = 0
+        result.rows_to_add = result.rows_to_correct = result.rows_to_fill = 0
+        result.workbook_matches = False
         result.blank_rows_to_remove, result.sheet_details = {}, {}
         result.total = "0.00"
         data = result.payload
@@ -305,12 +317,13 @@ class Controller:
                 if any(r.get("sequence") != record["sequence"] for r in record["rows"]):
                     raise ValueError("同一发票的明细序号不一致")
             self.progress("正在检查工作簿表头、页脚和明细映射…")
-            writer_plan = plan_workbook(result.workbook, data, original_payload=result.original_payload if result.corrections else None, corrected_workbook=result.workbook_written)
+            writer_plan = plan_workbook(result.workbook, data)
             result.rows_to_add, result.rows_to_correct = writer_plan.rows_to_add, writer_plan.rows_to_correct
+            result.rows_to_fill, result.workbook_matches = writer_plan.rows_to_fill, writer_plan.workbook_matches
             result.blank_rows_to_remove, result.sheet_details = writer_plan.blank_rows_to_remove, writer_plan.sheet_details
             writer_plan.workbook.close()
-            if result.manual_phase_uncertain and (result.rows_to_add or result.rows_to_correct):
-                result.issues.append("工作簿已变化但写表完成记录缺失，业务明细未完整对应校正结果；请核实并恢复原工作簿后重试")
+            if result.write_phase_uncertain and not result.workbook_matches:
+                result.issues.append("工作簿已变化但写表完成记录缺失，两表未完整对应本次重填结果；请核实并恢复原工作簿后重试")
             if len(result.sheet_details) != 2:
                 result.issues.append("工作簿映射不完整")
             from openpyxl import load_workbook
@@ -362,14 +375,13 @@ class Controller:
         self.progress("正在检查 Excel 与文件写入权限…")
         self.excel.check(preview.workbook)
         pending_state = self._save_pending(preview)
-        skip_write = (preview.resume_pending and pending_state.get("workbook_written")
-                      and not preview.rows_to_add and not preview.rows_to_correct and not any(preview.blank_rows_to_remove.values()))
-        result = dict(status="failed", completed=[], total=preview.total, payload=preview.payload, engine_version=preview.engine_version, corrections=preview.corrections, original_payload=preview.original_payload)
+        result = dict(status="failed", completed=[], total=preview.total, payload=preview.payload, engine_version=preview.engine_version, corrections=preview.corrections, original_payload=preview.original_payload, rows_filled=0)
         with self._scratch() as scratch:
             try:
                 records = scratch / "preview.json"
                 records.write_text(json.dumps(preview.payload, ensure_ascii=False), encoding="utf-8")
-                writer_plan = plan_workbook(preview.workbook, preview.payload, original_payload=preview.original_payload if preview.corrections else None, corrected_workbook=preview.workbook_written)
+                writer_plan = plan_workbook(preview.workbook, preview.payload)
+                skip_write = preview.resume_pending and pending_state.get("workbook_written") and writer_plan.workbook_matches
                 if preview.fingerprints != self._fingerprints(preview.pdf_dir, preview.workbook):
                     writer_plan.workbook.close()
                     raise ValueError("执行前文件再次发生变化，请重新预览")
@@ -384,12 +396,14 @@ class Controller:
                         raise ValueError("发票改名未完成：" + json.dumps(renamed.get("exceptions", []), ensure_ascii=False))
                     result["completed"].append("发票改名")
                     if not skip_write:
-                        self.progress("正在原位写入工作簿…")
+                        self.progress("正在清空两表旧明细并按完整批次重填…")
                         write_workbook(writer_plan)
+                        result["rows_filled"] = preview.rows_to_fill
+                        result["detail_rows_removed"] = preview.blank_rows_to_remove
                         self._save_pending(preview, workbook_written=True)
                 finally:
                     writer_plan.workbook.close()
-                result["completed"].append("工作簿写入已在上次完成" if skip_write else "写入工作簿")
+                result["completed"].append("两表重填已在上次完成" if skip_write else "清空旧明细并重填两表")
                 self.progress("正在应用字体并通过 Excel 重算…")
                 self.excel.apply(self.engine_dir / "apply_mixed_fonts_excel.ps1", preview.workbook)
                 result["completed"].append("字体与重算")
@@ -407,7 +421,6 @@ class Controller:
                 result["completed"].append("逐分验证")
                 self._pending_path(preview.pdf_dir, preview.workbook).unlink()
                 result["status"] = "completed"
-                result["blank_rows_removed"] = preview.blank_rows_to_remove
             except Exception as exc:
                 result["error"] = str(exc)
                 result["rename_plan"] = self._actual_rename_plan(preview)
