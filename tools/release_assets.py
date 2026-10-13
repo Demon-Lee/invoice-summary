@@ -7,6 +7,11 @@ from pathlib import Path
 from PIL import Image, ImageDraw
 
 root = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(root))
+from invoice_desktop import __version__
+from invoice_desktop.policy import BOUNDARY_GUIDE
+
+(root / "功能归属与更新边界.txt").write_text("发票汇总助手 " + __version__ + "\n\n" + BOUNDARY_GUIDE, encoding="utf-8")
 resources = root / "resources"
 resources.mkdir(exist_ok=True)
 scale = 4

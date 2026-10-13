@@ -9,7 +9,7 @@ from pathlib import Path
 
 project = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(project))
-from invoice_desktop.updates import EngineStore, FILES, read_manifest
+from invoice_desktop.updates import EngineStore, FILES, read_manifest, check_application_contract
 
 
 def prepare(directory, preserve):
@@ -39,8 +39,7 @@ def prepare(directory, preserve):
     if previous is not None:
         snapshots.append((previous, read_manifest(previous)))
     for _, manifest in snapshots:
-        if manifest["source_writer_sha256"] != baseline["source_writer_sha256"]:
-            raise ValueError("Saved rules do not match this build's workbook component; upgrade the main program and rules together")
+        check_application_contract(manifest, baseline)
     target = directory / "recognition"
     engines = target / "engines"
     engines.mkdir(parents=True, exist_ok=True)

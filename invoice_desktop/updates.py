@@ -14,7 +14,9 @@ import tempfile
 import zipfile
 from pathlib import Path
 
-FILES = ("SKILL.md", "invoice_pipeline.py", "collect_excel_totals.py", "apply_mixed_fonts_excel.ps1")
+from .policy import SHARED_FILES, shared_scope, validate_scope
+
+FILES = SHARED_FILES
 MAX_BYTES = 8 * 1024 * 1024
 
 
@@ -40,21 +42,33 @@ def manifest_for_skill(skill_dir):
     files, writer = source_files(skill_dir)
     hashes = {name: sha256(path) for name, path in files.items()}
     marker = sha256(writer)
-    version = hashlib.sha256(json.dumps([hashes, marker], sort_keys=True).encode()).hexdigest()[:12]
-    return {"format_version": 1, "version": version, "files": hashes, "source_writer_sha256": marker}
+    manifest = {"format_version": 2, "files": hashes, "source_writer_sha256": marker, "scope": shared_scope()}
+    manifest["version"] = _snapshot_version(manifest)
+    return manifest
+
+
+def _snapshot_version(manifest):
+    values = [manifest["files"], manifest["source_writer_sha256"]]
+    if manifest["format_version"] == 2:
+        values.append(manifest["scope"])
+    return hashlib.sha256(json.dumps(values, sort_keys=True).encode()).hexdigest()[:12]
 
 
 def read_manifest(directory):
     root = Path(directory)
     manifest = json.loads((root / "manifest.json").read_text(encoding="utf-8"))
-    if (manifest.get("format_version") != 1 or set(manifest.get("files", {})) != set(FILES)
+    if not isinstance(manifest, dict):
+        raise ValueError("更新包清单必须为对象")
+    validate_scope(manifest)
+    if (not isinstance(manifest.get("files"), dict) or set(manifest["files"]) != set(FILES)
             or not re.fullmatch(r"[a-f0-9]{12}", str(manifest.get("version", "")))
             or not re.fullmatch(r"[a-f0-9]{64}", str(manifest.get("source_writer_sha256", "")))):
         raise ValueError("更新包格式不兼容，需要升级主程序")
     for name, digest in manifest["files"].items():
-        if not (root / name).is_file() or sha256(root / name) != digest:
+        if (not re.fullmatch(r"[a-f0-9]{64}", str(digest))
+                or not (root / name).is_file() or sha256(root / name) != digest):
             raise ValueError(f"更新文件完整性检查失败：{name}")
-    expected = hashlib.sha256(json.dumps([manifest["files"], manifest["source_writer_sha256"]], sort_keys=True).encode()).hexdigest()[:12]
+    expected = _snapshot_version(manifest)
     if expected != manifest["version"]:
         raise ValueError("更新版本完整性检查失败")
     return manifest
@@ -146,13 +160,26 @@ def _validate_output_contract(modules):
             raise ValueError(f"识别接口输出不兼容：{exc}") from exc
 
 
+def check_application_contract(candidate, supported):
+    validate_scope(candidate)
+    if candidate["source_writer_sha256"] != supported["source_writer_sha256"]:
+        raise ValueError("skill 写表组件已变化，须核对共享字段和模板约定并升级软件后再同步；软件的人工校正和清空重填策略会保留。")
+
+
+def changed_files(candidate, baseline):
+    changed = [name for name in FILES if candidate["files"][name] != baseline["files"][name]]
+    if (candidate["format_version"] != baseline["format_version"]
+            or candidate.get("scope") != baseline.get("scope")):
+        changed.append("manifest.json")
+    return changed
+
+
 def check_compatible(candidate, baseline):
-    if candidate["source_writer_sha256"] != baseline["source_writer_sha256"]:
-        raise ValueError("skill 写表规则已变化，需要同步升级软件写表组件后再导入")
+    check_application_contract(candidate, baseline)
     changed = [name for name in FILES if candidate["files"][name] != baseline["files"][name]]
     if changed == ["SKILL.md"]:
         raise ValueError("只有规则说明变化，尚无对应脚本改进；请完成 skill 脚本适配后再同步")
-    return changed
+    return changed_files(candidate, baseline)
 
 
 def export_update(skill_dir, output, baseline=None):
@@ -196,7 +223,7 @@ class EngineStore:
 
     def active(self):
         directory = self._path(self._state()["active"])
-        read_manifest(directory)
+        check_application_contract(read_manifest(directory), read_manifest(self.bundled))
         return directory
 
     def version(self):
@@ -206,10 +233,11 @@ class EngineStore:
         candidate = manifest_for_skill(source)
         baseline = read_manifest(self.active())
         try:
+            check_application_contract(candidate, read_manifest(self.bundled))
             changed = check_compatible(candidate, baseline)
             error = None
         except ValueError as exc:
-            changed = [name for name in FILES if candidate["files"][name] != baseline["files"][name]]
+            changed = changed_files(candidate, baseline)
             if candidate["source_writer_sha256"] != baseline["source_writer_sha256"]:
                 changed.append("write_summary.mjs")
             error = str(exc)
@@ -236,7 +264,9 @@ class EngineStore:
                         raise ValueError("更新包包含不允许的文件类型")
                     (extracted / item.filename).write_bytes(archive.read(item))
             manifest = read_manifest(extracted)
-            changed = check_compatible(manifest, read_manifest(self.active()))
+            before = read_manifest(self.active())
+            check_application_contract(manifest, read_manifest(self.bundled))
+            changed = check_compatible(manifest, before)
             validate_python(extracted)
             destination = self.root / "engines" / manifest["version"]
             destination.parent.mkdir(exist_ok=True)
@@ -247,7 +277,7 @@ class EngineStore:
             state = self._state()
             if state["active"] != manifest["version"]:
                 self._activate({"active": manifest["version"], "previous": state["active"]})
-            return {"version": manifest["version"], "changed": changed}
+            return {"version": manifest["version"], "previous_version": before["version"], "changed": changed}
 
     def sync(self, source):
         with tempfile.TemporaryDirectory(prefix="sync-", dir=self.root) as temp:
@@ -259,6 +289,9 @@ class EngineStore:
         state = self._state()
         if state.get("previous") is None:
             raise ValueError("没有可回退的识别版本")
-        read_manifest(self._path(state["previous"]))
+        before = read_manifest(self.active())
+        candidate = read_manifest(self._path(state["previous"]))
+        check_application_contract(candidate, read_manifest(self.bundled))
         self._activate({"active": state["previous"], "previous": state["active"]})
+        return {"version": candidate["version"], "previous_version": before["version"], "changed": changed_files(candidate, before)}
 

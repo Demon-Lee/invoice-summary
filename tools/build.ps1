@@ -14,5 +14,7 @@ if ($LASTEXITCODE -ne 0) { throw 'build failed' }
 if ($LASTEXITCODE -ne 0) { throw 'portable recognition preparation failed' }
 $invoiceGuideName = -join @([char]0x4f7f, [char]0x7528, [char]0x8bf4, [char]0x660e, '.txt')
 Copy-Item -LiteralPath $invoiceGuideName -Destination ('dist\InvoiceSummary\' + $invoiceGuideName)
+$invoiceBoundaryName = -join @([char]0x529f, [char]0x80fd, [char]0x5f52, [char]0x5c5e, [char]0x4e0e, [char]0x66f4, [char]0x65b0, [char]0x8fb9, [char]0x754c, '.txt')
+Copy-Item -LiteralPath $invoiceBoundaryName -Destination ('dist\InvoiceSummary\' + $invoiceBoundaryName)
 Copy-Item -LiteralPath 'THIRD_PARTY_NOTICES.txt' -Destination 'dist\InvoiceSummary\THIRD_PARTY_NOTICES.txt'
 

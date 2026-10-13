@@ -14,6 +14,7 @@ from . import __version__
 from .controller import Controller, resource_root, application_root
 from .updates import EngineStore, export_update, read_manifest
 from .corrections import FIELDS, LABELS, field_value, normalize
+from .policy import BOUNDARY_GUIDE, RETAINED_FEATURES, describe_changes
 
 EXECUTION_STEPS = (
     "1. 选择完整批次的 PDF 文件夹和目标 .xlsx 工作簿。",
@@ -28,7 +29,7 @@ NECESSARY_CONDITIONS = (
     "执行前关闭目标工作簿；软件和输入文件所在目录须可写。",
 )
 PROCESS_NOTICE = "执行会重命名 PDF，清空两表旧明细（含品牌、备注）后整批重填；原位更新，不自动备份。"
-HELP_HEADINGS = ("执行步骤", "必要条件", "阶段提示", "人工校正", "工作簿详细要求", "处理与恢复", "识别原则", "规则更新与分发")
+HELP_HEADINGS = ("执行步骤", "必要条件", "阶段提示", "人工校正", "工作簿详细要求", "处理与恢复", "识别原则", "规则更新与分发", "功能归属与更新边界", "一、与 skill 保持一致：共享规则", "二、软件独有功能：随软件版本更新", "三、双方共同遵守：数据与模板约定", "软件执行流程", "原始 skill 说明的适用范围", "以后更新与分发")
 HELP = "\n".join(("执行步骤", *EXECUTION_STEPS, "", PROCESS_NOTICE, "", "必要条件", *NECESSARY_CONDITIONS)) + """
 
 阶段提示
@@ -61,8 +62,8 @@ HELP = "\n".join(("执行步骤", *EXECUTION_STEPS, "", PROCESS_NOTICE, "", "必
 
 同步规则需要软件文件夹可写。你的本机 skill 路径绑定仅保存在本机；接收方无需绑定 skill 或导入规则包。仍可单独导出、导入离线更新包。处理时固定使用界面显示的识别版本。
 
-只修改 SKILL.md 文字不会自动改进算法：需要同时更新对应脚本和测试。写表原则变化或新增依赖可能要求升级主程序。更新前请由 skill 维护者运行其测试。
-"""
+只修改 SKILL.md 文字不会自动改进算法：需要同时更新对应脚本和测试。共享字段、模板约定或依赖变化可能要求升级软件。人工校正和清空重填由软件维护。更新前请由 skill 维护者运行其测试。
+""" + "\n" + BOUNDARY_GUIDE
 
 
 class App:
@@ -216,7 +217,7 @@ class App:
         self.progress_bar = ttk.Progressbar(outer, mode="indeterminate")
         self.progress_bar.pack(fill="x")
         ttk.Label(rules, textvariable=self.version, font=("Microsoft YaHei UI", 12, "bold")).pack(anchor="w", pady=(0, 10))
-        ttk.Label(rules, text="同步成功后关闭软件，打包整个软件文件夹即可分发；接收方解压后直接运行。绑定本机 skill 后，预览前会检查更新。", wraplength=950).pack(anchor="w")
+        ttk.Label(rules, text="同步仅更新共享规则；人工校正、清空重填等软件功能继续保留。同步成功后关闭软件，打包整个软件文件夹即可分发。", wraplength=950).pack(anchor="w")
         ttk.Label(rules, text=f"软件文件夹：{self.application_dir}", wraplength=950).pack(anchor="w", pady=(6, 0))
         source_row = ttk.Frame(rules)
         source_row.pack(fill="x", pady=10)
@@ -229,16 +230,34 @@ class App:
         for label, action in (("同步本机 skill", self._sync), ("打开软件文件夹", lambda: self._open(self.application_dir)), ("导出离线更新包", self._export), ("导入更新包", self._import), ("回退版本", self._rollback), ("解除绑定", self._unbind)):
             self._button(source_buttons, label, action).pack(side="left", padx=(0, 6))
         ttk.Label(rules, textvariable=self.source_status, wraplength=950).pack(anchor="w", pady=10)
-        ttk.Label(rules, text="当前识别版本的 skill 规则").pack(anchor="w", pady=(6, 5))
-        self.rule_text = self._text(rules)
+        self.rule_tabs = ttk.Notebook(rules)
+        self.rule_tabs.pack(fill="both", expand=True)
+        boundary_tab = ttk.Frame(self.rule_tabs, padding=8)
+        self.update_tab = ttk.Frame(self.rule_tabs, padding=8)
+        reference_tab = ttk.Frame(self.rule_tabs, padding=8)
+        self.rule_tabs.add(boundary_tab, text="功能归属")
+        self.rule_tabs.add(self.update_tab, text="本次更新结果")
+        self.rule_tabs.add(reference_tab, text="skill 原始说明")
+        self.boundary_text = self._text(boundary_tab)
+        self.boundary_text.pack(fill="both", expand=True)
+        self._set_text(self.boundary_text, BOUNDARY_GUIDE)
+        self._mark_headings(self.boundary_text, BOUNDARY_GUIDE)
+        self.update_text = self._text(self.update_tab)
+        self.update_text.pack(fill="both", expand=True)
+        self._set_text(self.update_text, "同步、导入或回退共享规则后，这里会显示更新范围和保留的软件功能。\n\n" + "保留的软件功能：" + RETAINED_FEATURES)
+        ttk.Label(reference_tab, text="此页保留 skill 原文作为共享规则来源参考。软件交互、人工校正及整批重填以“功能归属”页为准。", wraplength=950).pack(anchor="w", pady=(0, 6))
+        self.rule_text = self._text(reference_tab)
         self.rule_text.pack(fill="both", expand=True)
         text_widget = self._text(help_tab)
         text_widget.pack(fill="both", expand=True)
         self._set_text(text_widget, HELP)
-        text_widget.tag_configure("section", font=("Microsoft YaHei UI", 16, "bold"), foreground="#173b68", spacing1=12, spacing3=8)
-        for line_number, line in enumerate(HELP.splitlines(), 1):
+        self._mark_headings(text_widget, HELP)
+
+    def _mark_headings(self, widget, content):
+        widget.tag_configure("section", font=("Microsoft YaHei UI", 16, "bold"), foreground="#173b68", spacing1=12, spacing3=8)
+        for line_number, line in enumerate(content.splitlines(), 1):
             if line in HELP_HEADINGS:
-                text_widget.tag_add("section", f"{line_number}.0", f"{line_number}.end")
+                widget.tag_add("section", f"{line_number}.0", f"{line_number}.end")
 
     def _guide_card(self, parent, column, title, items, style_name, padding):
         card = ttk.Frame(parent, padding=(14, 10), style=f"{style_name}.TFrame")
@@ -319,7 +338,7 @@ class App:
     def _check_source(self):
         source = self.source.get().strip()
         if not source:
-            self.source_status.set("使用随软件文件夹携带的识别规则；需要维护规则时可选择本机 skill。")
+            self.source_status.set("使用随软件携带的共享规则；人工校正、清空重填等功能由软件版本维护。")
             return None
         try:
             status = self.store.source_status(source)
@@ -327,10 +346,10 @@ class App:
                 self.source_status.set(status["error"])
                 return status["error"]
             if status["changed"]:
-                value = "发现 skill 更新，请先同步：" + "、".join(status["changed"])
+                value = "发现共享规则更新，请先同步：" + "、".join(describe_changes(status["changed"]))
                 self.source_status.set(value)
                 return value
-            self.source_status.set("已与本机 skill 同步 · 来源：" + source)
+            self.source_status.set("共享规则已与本机 skill 同步 · 来源：" + source)
             return None
         except Exception as exc:
             value = "绑定来源不可用：" + str(exc)
@@ -346,7 +365,7 @@ class App:
         self.root.after(3000, self._periodic_source)
 
     def _refresh_version(self):
-        self.version.set(f"软件 {__version__}  ·  识别版本 {self.store.version()}")
+        self.version.set(f"软件 {__version__}  ·  共享规则版本 {self.store.version()}")
         self._set_text(self.rule_text, (self.store.active() / "SKILL.md").read_text(encoding="utf-8"))
         self._check_source()
 
@@ -604,9 +623,9 @@ class App:
                 return self.store.sync(source)
             except PermissionError as exc:
                 raise ValueError(f"同步未完成，软件文件夹不可写：{self.application_dir}。请将整个软件文件夹放到可写位置后重新同步。") from exc
-        self._run(work, self._updated)
+        self._run(work, lambda result: self._updated(result, action="同步"))
 
-    def _updated(self, result):
+    def _updated(self, result, *, action):
         if self.source.get():
             try:
                 source_status = self.store.source_status(self.source.get())
@@ -617,8 +636,24 @@ class App:
         self._save_settings()
         self._invalidate()
         self._refresh_version()
-        self.status.set("识别版本已更新：" + result["version"])
-        messagebox.showinfo("更新完成", "已更新识别版本：" + result["version"] + "\n修改文件：" + "、".join(result.get("changed", [])) + f"\n\n规则已保存到软件文件夹：{self.application_dir}\n关闭软件后，可把整个文件夹打包分发。")
+        self.status.set(f"共享规则{action}完成：" + result["version"])
+        changed = describe_changes(result["changed"])
+        scope = "\n".join("· " + item for item in changed) if changed else "共享规则已是当前版本，无需更换。"
+        compatibility = "更新范围声明及写表组件版本检查通过。"
+        if action != "回退":
+            compatibility += "共享脚本的既定接口检查通过。"
+        compatibility += "实际发票仍须只读预览和逐分复核。"
+        report = (f"共享规则{action}完成\n\n"
+                  f"共享规则版本：{result['previous_version']} → {result['version']}\n"
+                  "本次涉及的共享范围：\n" + scope + "\n\n"
+                  f"保留的软件功能：{RETAINED_FEATURES}\n"
+                  f"这些功能由软件 {__version__} 维护，skill 更新包不能替换。\n\n"
+                  "兼容性：" + compatibility + "\n"
+                  f"规则所在的软件文件夹：{self.application_dir}\n"
+                  "继续处理前请重新预览。关闭软件后，可将整个文件夹打包分发。")
+        self._set_text(self.update_text, report)
+        self.rule_tabs.select(self.update_tab)
+        messagebox.showinfo(f"共享规则{action}完成", "本次涉及：\n" + scope + f"\n\n保留的软件功能：{RETAINED_FEATURES}\n\n关闭软件后，可把整个软件文件夹打包分发。", parent=self.root)
 
     def _export(self):
         source = self.source.get().strip()
@@ -627,19 +662,17 @@ class App:
             return
         output = filedialog.asksaveasfilename(title="导出离线 skill 更新包", defaultextension=".zip", initialfile="invoice-skill-update.zip", filetypes=[("更新包", "*.zip")])
         if output:
-            self._run(lambda: export_update(source, output, read_manifest(self.store.active())), lambda result: messagebox.showinfo("导出完成", "更新包已保存：" + output))
+            self._run(lambda: export_update(source, output, read_manifest(self.store.active())), lambda result: messagebox.showinfo("导出完成", "共享规则更新包已保存：" + output + f"\n\n该包声明共享规则范围；软件功能（{RETAINED_FEATURES}）随软件版本维护。", parent=self.root))
 
     def _import(self):
         path = filedialog.askopenfilename(title="选择可信的离线 skill 更新包", filetypes=[("更新包", "*.zip")])
         if path:
-            self._run(lambda: self.store.install(path), self._updated)
+            self._run(lambda: self.store.install(path), lambda result: self._updated(result, action="导入"))
 
     def _rollback(self):
-        def done(_):
+        def done(result):
             self.source.set("")
-            self._invalidate()
-            self._refresh_version()
-            self.status.set("已回退识别版本，并解除来源绑定；可重新绑定改进后的 skill。")
+            self._updated(result, action="回退")
         self._run(self.store.rollback, done)
 
     def _unbind(self):
