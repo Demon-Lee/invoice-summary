@@ -7,4 +7,5 @@ release/
 recognition/
 .pytest_cache/
 *.spec
+.superpowers/
 
