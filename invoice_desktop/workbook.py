@@ -6,7 +6,7 @@ import re
 import tempfile
 import warnings
 from copy import copy
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 
@@ -14,7 +14,7 @@ from openpyxl import load_workbook
 from openpyxl.cell.cell import MergedCell
 from openpyxl.formula import Tokenizer
 from openpyxl.styles import Alignment
-from openpyxl.utils import get_column_letter
+from openpyxl.utils import column_index_from_string, get_column_letter
 from openpyxl.worksheet.cell_range import CellRange
 from openpyxl.worksheet.print_settings import PrintArea
 from openpyxl.workbook.properties import CalcProperties
@@ -126,12 +126,78 @@ def _existing(ws, columns, row_number):
     return result
 
 
-def _populated(ws, row):
-    return any(text(c.value) or c.comment is not None or c.hyperlink is not None for c in ws[row])
+def _detail_last_column(ws, header, columns):
+    """Include all business headers, including brand and remarks, in the refill."""
+    last = max([*columns.values(), *(c.column for c in ws[header] if text(c.value))])
+    return max([last, *(rng.max_col for rng in ws.merged_cells.ranges
+                       if rng.min_row <= header <= rng.max_row and rng.min_col <= last)])
 
 
-def _matches_sheet(ws, header, columns, footer, rows):
+def _populated(ws, row, last_column=None):
+    cells = ws.iter_rows(min_row=row, max_row=row, max_col=last_column)
+    return any(text(c.value) or c.comment is not None or c.hyperlink is not None for c in next(cells))
+
+
+def _fixed_margin(sheet, row, column, areas):
+    header, last_column = areas.get(sheet, (row, column))
+    return row > header and column > last_column
+
+
+def _capture_margin(ws, header, last_column):
+    if last_column >= ws.max_column:
+        return {}
+    return {(c.row, c.column): copy(c)
+            for row in ws.iter_rows(min_row=header+1, min_col=last_column+1)
+            for c in row if not isinstance(c, MergedCell)}
+
+
+def _restore_margin(ws, header, last_column, margin, original_print_ranges, original_footer, footer_delta):
+    """A side legend stays at its original coordinates while the main table moves."""
+    if margin:
+        for row in ws.iter_rows(min_row=header+1, min_col=last_column+1):
+            for cell in row:
+                cell.value = cell.comment = cell.hyperlink = None
+                cell._style = None
+        for (row, column), saved in margin.items():
+            cell = ws.cell(row, column)
+            cell.value, cell.data_type = copy(saved.value), saved.data_type
+            cell._style = copy(saved._style)
+            cell.comment, cell.hyperlink = copy(saved.comment), copy(saved.hyperlink)
+    if ws.print_area:
+        ranges = [copy(rng) for rng in PrintArea.from_string(ws.print_area).ranges]
+        origins = {}
+        for original in original_print_ranges:
+            shifted = copy(original)
+            if shifted.min_row >= original_footer:
+                shifted.min_row += footer_delta
+            if shifted.max_row >= original_footer:
+                shifted.max_row += footer_delta
+            origins.setdefault(shifted.coord, []).append(original)
+        for rng in ranges:
+            originals = origins.get(rng.coord, [])
+            included = [row for (row, col), c in margin.items()
+                        if c.value is not None and rng.min_col <= col <= rng.max_col
+                        and any(old.min_row <= row <= old.max_row for old in originals)]
+            if included:
+                rng.min_row, rng.max_row = min(rng.min_row, min(included)), max(rng.max_row, max(included))
+        ws.print_area = [rng.coord for rng in ranges]
+
+
+def _same_margin_cell(actual, expected):
+    def link_value(link):
+        return None if link is None else (link.ref, link.target, link.location, link.tooltip, link.display)
+    def comment_value(comment):
+        return None if comment is None else (comment.text, comment.author)
+    same_type = actual.data_type == expected.data_type or actual.value is None and expected.value is None
+    same_style = actual._style == expected._style or not actual.has_style and not expected.has_style
+    return (actual.value == expected.value and same_type and same_style
+            and comment_value(actual.comment) == comment_value(expected.comment)
+            and link_value(actual.hyperlink) == link_value(expected.hyperlink))
+
+
+def _matches_sheet(ws, header, columns, footer, rows, last_column=None):
     """Recognize an already-written pending refill, without authorizing normal skips."""
+    last_column = last_column or _detail_last_column(ws, header, columns)
     if footer != header + len(rows) + 1:
         return False
     for r, expected in enumerate(rows, header + 1):
@@ -157,6 +223,8 @@ def _matches_sheet(ws, header, columns, footer, rows):
         except (ValueError, TypeError, OverflowError, InvalidOperation):
             return False
         for cell in ws[r]:
+            if cell.column > last_column:
+                continue
             if cell.comment is not None or cell.hyperlink is not None:
                 return False
             if cell.column not in columns.values() and cell.value is not None:
@@ -169,7 +237,7 @@ def _matches_sheet(ws, header, columns, footer, rows):
     return True
 
 
-def _shift_rows(ws, start, delta):
+def _shift_rows(ws, start, delta, fixed_area=None):
     """openpyxl does not shift merge/dimension/print metadata by itself."""
     if not delta:
         return
@@ -191,7 +259,9 @@ def _shift_rows(ws, start, delta):
             raise ValueError(f"{ws.title} 重复打印行涉及待移动区域，请调整模板")
     if ws.freeze_panes and CellRange(str(ws.freeze_panes)).max_row >= affected:
         raise ValueError(f"{ws.title} 冻结窗格涉及待移动区域，请调整模板")
-    if any(cell.hyperlink is not None for row in ws.iter_rows(min_row=affected) for cell in row):
+    if any(cell.hyperlink is not None
+           and not (fixed_area and cell.row > fixed_area[0] and cell.column > fixed_area[1])
+           for row in ws.iter_rows(min_row=affected) for cell in row):
         raise ValueError(f"{ws.title} 超链接涉及待移动区域，请调整模板")
     merges = [copy(rng) for rng in ws.merged_cells.ranges if rng.min_row >= start]
     if any(rng.min_row < start <= rng.max_row for rng in ws.merged_cells.ranges):
@@ -222,7 +292,7 @@ def _shift_rows(ws, start, delta):
         ws.print_area = [rng.coord for rng in print_ranges]
 
 
-def _remap_formula(value, sheet, row_maps):
+def _remap_formula(value, sheet, row_maps, fixed_areas=None):
     """Track references to moved cells, including absolute and cross-sheet refs."""
     tokens = Tokenizer(value).items
     for token in tokens:
@@ -235,19 +305,34 @@ def _remap_formula(value, sheet, row_maps):
         if prefix and ("[" in prefix or ":" in prefix):
             raise ValueError(f"{sheet} 外部或跨表区域公式无法安全随行移动：{value}")
         parts = reference.split(":")
+        fixed_area = (fixed_areas or {}).get(target_sheet)
+        if fixed_area and len(parts) == 2 and all(re.fullmatch(r"\$?[A-Za-z]{1,3}\$?[1-9][0-9]*", part) for part in parts):
+            region = CellRange(reference)
+            header, last_column = fixed_area
+            if (region.min_col <= last_column < region.max_col and region.max_row > header
+                    and any(region.min_row <= old <= region.max_row and old != new
+                            for old, new in row_maps.get(target_sheet, {}).items())):
+                raise ValueError(f"{sheet} 公式区域跨越主表和固定右侧文字，无法安全随行移动：{value}")
         mapped = []
+        fixed_flags, changed = [], False
         for part in parts:
             match = re.fullmatch(r"(\$?[A-Za-z]{1,3}\$?)([1-9][0-9]*)", part)
             if match:
                 row = int(match[2])
-                moved = row_maps.get(target_sheet, {}).get(row, row)
+                column = column_index_from_string(match[1].replace("$", ""))
+                fixed = _fixed_margin(target_sheet, row, column, fixed_areas or {})
+                fixed_flags.append(fixed)
+                moved = row if fixed else row_maps.get(target_sheet, {}).get(row, row)
                 if moved is None:
                     raise ValueError(f"{sheet} 公式引用待移除的明细行，无法安全移动：{value}")
                 mapped.append(match[1] + str(moved))
+                changed = changed or moved != row
             elif re.fullmatch(r"\$?[A-Za-z]{1,3}", part) and len(parts) == 2:
                 mapped.append(part)
             else:
                 raise ValueError(f"{sheet} 命名或特殊区域公式无法安全随行移动：{value}")
+        if changed and len(set(fixed_flags)) > 1:
+            raise ValueError(f"{sheet} 公式区域跨越主表和固定右侧文字，无法安全随行移动：{value}")
         token.value = (prefix + "!" if prefix else "") + ":".join(mapped)
     return "=" + "".join(token.value for token in tokens)
 
@@ -263,6 +348,7 @@ class WorkbookPlan:
     rows_to_correct: int = 0
     rows_to_fill: int = 0
     workbook_matches: bool = False
+    fixed_margins: dict = field(default_factory=dict)
 
 
 def plan_workbook(path, payload, run_date=None):
@@ -286,29 +372,35 @@ def plan_workbook(path, payload, run_date=None):
         date_text = f"{day.year}.{day.month}.{day.day}"
         removed, details, added_counts, matching = {}, {}, [], []
         formulas = [(ws.title, c.row, c.column, c.value) for ws in wb for row in ws for c in row if c.data_type == "f"]
-        row_maps, regenerated, discarded = {}, set(), set()
+        row_maps, regenerated, discarded, fixed_areas, margins = {}, set(), set(), {}, {}
         for name in SIGNERS:
             ws = wb[name]
             header, columns, footer, date_col = inspect_sheet(ws)
+            last_column = _detail_last_column(ws, header, columns)
+            fixed_areas[name] = (header, last_column)
+            margin = _capture_margin(ws, header, last_column)
+            original_print_ranges = [copy(rng) for rng in PrintArea.from_string(ws.print_area).ranges] if ws.print_area else []
+            if len(rows) != footer-header-1 and any(rng.max_col > last_column and rng.max_row > header for rng in ws.merged_cells.ranges):
+                raise ValueError(f"{name} 主表右侧固定区域存在合并单元格，无法安全增减明细行，请调整模板")
             original_footer, original_max_row = footer, ws.max_row
             template_row = header + 1
             if template_row >= footer:
                 raise ValueError(f"{name} 缺少可继承格式的明细行，请使用含空白明细行的模板")
             template_styles = [copy(c._style) for c in ws[template_row]]
             template_height = ws.row_dimensions[template_row].height
-            matching.append(_matches_sheet(ws, header, columns, footer, rows))
-            old_count = sum(_populated(ws, r) for r in range(header+1, footer))
+            matching.append(_matches_sheet(ws, header, columns, footer, rows, last_column))
+            old_count = sum(_populated(ws, r, last_column) for r in range(header+1, footer))
             added_counts.append(max(0, len(rows) - old_count))
-            discarded.update((name, r, col) for sheet, r, col, value in formulas if sheet == name and header < r < original_footer)
+            discarded.update((name, r, col) for sheet, r, col, value in formulas if sheet == name and header < r < original_footer and col <= last_column)
             expansion = max(0, len(rows) - (footer-header-1))
-            _shift_rows(ws, footer, expansion)
+            _shift_rows(ws, footer, expansion, fixed_areas[name])
             footer += expansion
             for r in range(header+1, footer):
                 if r >= original_footer:
                     ws.row_dimensions[r].height = template_height
                     for col, style in enumerate(template_styles, 1):
                         ws.cell(r, col)._style = copy(style)
-                for cell in ws[r]:
+                for cell in next(ws.iter_rows(min_row=r, max_row=r, max_col=last_column)):
                     cell.value = None
                     cell.hyperlink = cell.comment = None
             for r, row in enumerate(rows, header+1):
@@ -327,8 +419,10 @@ def plan_workbook(path, payload, run_date=None):
             last = header + len(rows)
             count = footer-last-1
             removed[name] = count
-            _shift_rows(ws, footer, -count)
+            _shift_rows(ws, footer, -count, fixed_areas[name])
             footer -= count
+            if expansion or count:
+                _restore_margin(ws, header, last_column, margin, original_print_ranges, original_footer, footer-original_footer)
             row_maps[name] = {r: r if r <= last else None for r in range(header+1, original_footer)}
             for r in range(original_footer, original_max_row+1):
                 row_maps[name][r] = r + footer - original_footer
@@ -339,7 +433,7 @@ def plan_workbook(path, payload, run_date=None):
                 letter = get_column_letter(columns[label])
                 ws.cell(footer, columns[label], f"=SUM({letter}{header+1}:{letter}{footer-1})" if footer > header+1 else "=0")
             ws.cell(footer+1, date_col, date_text)
-            details[name] = {"headerRow": header, "footerRow": footer, "columns": columns, "rowsToAdd": added_counts[-1], "rowsToCorrect": 0, "blankRowsToRemove": count, "oldRowsToClear": old_count, "rowsToFill": len(rows)}
+            details[name] = {"headerRow": header, "footerRow": footer, "columns": columns, "detailLastColumn": last_column, "fixedTextCellsToPreserve": sum(c.value is not None for c in margin.values()), "rowsToAdd": added_counts[-1], "rowsToCorrect": 0, "blankRowsToRemove": count, "oldRowsToClear": old_count, "rowsToFill": len(rows)}
             inspect_sheet(ws)
         moved = any(old != new for mapping in row_maps.values() for old, new in mapping.items())
         if moved:
@@ -348,12 +442,14 @@ def plan_workbook(path, payload, run_date=None):
             for name, row, col, formula in formulas:
                 if (name, row, col) in regenerated or (name, row, col) in discarded:
                     continue
-                target_row = row_maps.get(name, {}).get(row, row)
+                target_row = row if _fixed_margin(name, row, col, fixed_areas) else row_maps.get(name, {}).get(row, row)
                 if target_row is None or not isinstance(formula, str):
                     raise ValueError(f"{name} 公式无法安全随行移动")
-                wb[name].cell(target_row, col, _remap_formula(formula, name, row_maps))
+                wb[name].cell(target_row, col, _remap_formula(formula, name, row_maps, fixed_areas))
+        for name, (header, last_column) in fixed_areas.items():
+            margins[name] = _capture_margin(wb[name], header, last_column)
         wb.calculation = CalcProperties(calcId=0, fullCalcOnLoad=True, forceFullCalc=True)
-        return WorkbookPlan(path, wb, max(added_counts), removed, sum((r["amount"] for r in rows), Decimal("0.00")), details, rows_to_fill=len(rows), workbook_matches=all(matching))
+        return WorkbookPlan(path, wb, max(added_counts), removed, sum((r["amount"] for r in rows), Decimal("0.00")), details, rows_to_fill=len(rows), workbook_matches=all(matching), fixed_margins=margins)
     except Exception:
         wb.close()
         raise
@@ -369,13 +465,17 @@ def write_workbook(plan):
         try:
             for name in SIGNERS:
                 header, columns, footer, date_col = inspect_sheet(check[name])
-                if footer > header+1 and not _populated(check[name], footer-1):
+                last_column = _detail_last_column(check[name], header, columns)
+                if footer > header+1 and not _populated(check[name], footer-1, last_column):
                     raise ValueError(f"{name} 写后仍有多余末尾空行")
                 for label in ("数量", "金额"):
                     letter = get_column_letter(columns[label])
                     expected = f"=SUM({letter}{header+1}:{letter}{footer-1})" if footer > header+1 else "=0"
                     if check[name].cell(footer, columns[label]).value != expected:
                         raise ValueError(f"{name} 写后总计公式不符合计划")
+                for (row, col), expected in (plan.fixed_margins or {}).get(name, {}).items():
+                    if not _same_margin_cell(check[name].cell(row, col), expected):
+                        raise ValueError(f"{name} 写后右侧模板内容未完整保留：{get_column_letter(col)}{row}，未替换原工作簿")
         finally:
             check.close()
         os.replace(staged, plan.path)

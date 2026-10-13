@@ -28,7 +28,7 @@ NECESSARY_CONDITIONS = (
     "约定格式的 .xlsx，含“验收”“领用”、表头、日期与三行页脚。",
     "执行前关闭目标工作簿；软件和输入文件所在目录须可写。",
 )
-PROCESS_NOTICE = "执行会重命名 PDF，清空两表旧明细（含品牌、备注）后整批重填；原位更新，不自动备份。"
+PROCESS_NOTICE = "执行会重命名 PDF，清空两表主表旧明细（含品牌、备注）后整批重填；保留右侧模板文字；原位更新，不自动备份。"
 HELP_HEADINGS = ("执行步骤", "必要条件", "阶段提示", "人工校正", "工作簿详细要求", "处理与恢复", "识别原则", "规则更新与分发", "功能归属与更新边界", "一、与 skill 保持一致：共享规则", "二、软件独有功能：随软件版本更新", "三、双方共同遵守：数据与模板约定", "软件执行流程", "原始 skill 说明的适用范围", "以后更新与分发")
 HELP = "\n".join(("执行步骤", *EXECUTION_STEPS, "", PROCESS_NOTICE, "", "必要条件", *NECESSARY_CONDITIONS)) + """
 
@@ -47,7 +47,7 @@ HELP = "\n".join(("执行步骤", *EXECUTION_STEPS, "", PROCESS_NOTICE, "", "必
 工作簿详细要求
 工作簿须包含“验收”“领用”两张表，且各有完整表头、明细格式行、唯一三行页脚（合计、签字、说明）和日期标签。
 
-每次按完整批次重填：清空表头与合计之间全部明细内容，包括品牌、备注、其他手填内容、批注和超链接。保留表头、格式、签字和说明页脚，按当前明细数量调整数据区并重新计算单价及合计。PDF 目录中没有的旧明细将移除；旧表内人工修改不会保留。
+每次按完整批次重填：清空表头与合计之间的主表明细内容，包括品牌、备注、其他手填内容、批注和超链接。列范围按完整表头（包括合并表头）界定；主表右侧“第二联：财务报销”等模板内容保留原位置和样式。保留表头、格式、签字和说明页脚，按当前明细数量调整数据区并重新计算单价及合计。PDF 目录中没有的旧明细将移除；主表明细中的人工修改不会保留。旧版已删除的模板文字不会自动补回，请补回文字或使用完整模板。
 
 处理与恢复
 只读预览不会重命名 PDF，也不会保存或清空工作簿。预览通过后才可执行：软件会改名、清空旧明细并重填两表、设置字体、调用 Excel 重算，并逐票复核金额。出现重名、字段不确定、金额不一致或模板结构异常时停止。解决异常后重新预览。
@@ -440,9 +440,9 @@ class App:
         invoices = len(preview.payload.get("records", []))
         rows = sum(len(r.get("rows", [])) for r in preview.payload.get("records", []))
         self.summary.set(f"{invoices} 张发票 · 整批重填 {rows} 条明细 · 本批合计 ¥{preview.total} · 人工校正 {len(preview.corrections)} 条")
-        parts = [f"目标工作簿：{preview.workbook}（原位更新，不自动创建备份）", f"识别版本：{preview.engine_version}", "填表方式：清空两表全部旧明细（含品牌、备注），按本次完整批次重填。"]
+        parts = [f"目标工作簿：{preview.workbook}（原位更新，不自动创建备份）", f"识别版本：{preview.engine_version}", "填表方式：清空两表主表旧明细（含品牌、备注），按本次完整批次重填，保留右侧模板内容。"]
         for name, details in preview.sheet_details.items():
-            parts.append(f"{name}：模板检查通过；将清空旧明细 {details['oldRowsToClear']} 行，重填 {details['rowsToFill']} 条；缩减明细区 {details['blankRowsToRemove']} 行。")
+            parts.append(f"{name}：模板检查通过；将清空主表旧明细 {details['oldRowsToClear']} 行（含品牌、备注），重填 {details['rowsToFill']} 条；缩减明细区 {details['blankRowsToRemove']} 行；保留右侧模板内容 {details['fixedTextCellsToPreserve']} 个单元格。")
         parts.extend(self._correction_lines(preview.original_payload, preview.corrections))
         parts.append("异常：\n" + "\n".join(preview.issues) if preview.issues else "异常：无；只读预览通过，尚未改动文件。")
         if preview.resume_pending:
