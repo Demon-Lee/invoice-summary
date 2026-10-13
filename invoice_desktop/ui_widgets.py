@@ -4,6 +4,110 @@ import time
 import tkinter as tk
 
 
+class ProportionalTreeviewColumns:
+    """Size native columns by weights while preserving manual divider changes."""
+
+    def __init__(self, tree, columns, weights, minimums):
+        self.tree = tree
+        self.columns = tuple(columns)
+        self.weights = list(weights)
+        self.minimums = tuple(minimums)
+        if (not self.columns or len(self.columns) != len(self.weights)
+                or len(self.columns) != len(self.minimums)
+                or any(weight <= 0 for weight in self.weights)
+                or any(minimum <= 0 for minimum in self.minimums)):
+            raise ValueError("Column names, positive weights and minimums must match")
+        self._after = None
+        self._last_width = None
+        self._dragging = False
+        self._drag_start = ()
+        self._dead = False
+        for sequence, callback in (
+            ("<Configure>", self._schedule), ("<Map>", self._schedule),
+            ("<ButtonPress-1>", self._press), ("<Double-1>", self._press),
+            ("<ButtonRelease-1>", self._release), ("<Destroy>", self._destroyed),
+        ):
+            tree.bind(sequence, callback, add="+")
+        self._schedule()
+
+    def _widths(self, available):
+        remaining = max(available, sum(self.minimums))
+        active = list(range(len(self.columns)))
+        widths = [0] * len(self.columns)
+        while active:
+            weight_sum = sum(self.weights[index] for index in active)
+            constrained = [index for index in active
+                           if remaining * self.weights[index] / weight_sum < self.minimums[index]]
+            if constrained:
+                for index in constrained:
+                    widths[index] = self.minimums[index]
+                    remaining -= widths[index]
+                    active.remove(index)
+                continue
+            ideals = {index: remaining * self.weights[index] / weight_sum for index in active}
+            for index in active:
+                widths[index] = int(ideals[index])
+            extra = remaining - sum(widths[index] for index in active)
+            order = sorted(active, key=lambda index: (-(ideals[index]-widths[index]), index))
+            for index in order[:extra]:
+                widths[index] += 1
+            break
+        return widths
+
+    def _cancel(self):
+        if self._after is not None:
+            try:
+                self.tree.after_cancel(self._after)
+            except tk.TclError:
+                pass
+            self._after = None
+
+    def _schedule(self, event=None):
+        if not self._dead and not self._dragging and self._after is None:
+            self._after = self.tree.after_idle(self._apply)
+
+    def _apply(self):
+        self._after = None
+        if self._dead or self._dragging or not self.tree.winfo_ismapped():
+            return
+        available = max(0, self.tree.winfo_width()-2)
+        if available <= 1 or available == self._last_width:
+            return
+        self._last_width = available
+        for column, width in zip(self.columns, self._widths(available)):
+            if int(self.tree.column(column, "width")) != width:
+                self.tree.column(column, width=width)
+
+    def _press(self, event):
+        if not self._dead and self.tree.identify_region(event.x, event.y) == "separator":
+            self._dragging = True
+            self._drag_start = tuple(int(self.tree.column(column, "width")) for column in self.columns)
+            self._cancel()
+
+    def _release(self, event):
+        if self._dead or not self._dragging:
+            return
+        self._cancel()
+        # Widget bindings run before Treeview's native release/drop binding.
+        self._after = self.tree.after_idle(self._finish_drag)
+
+    def _finish_drag(self):
+        self._after = None
+        if self._dead:
+            return
+        widths = tuple(int(self.tree.column(column, "width")) for column in self.columns)
+        if widths != self._drag_start:
+            self.weights = list(widths)
+        self._drag_start = ()
+        self._dragging = False
+        self._schedule()
+
+    def _destroyed(self, event):
+        if event.widget is self.tree:
+            self._dead = True
+            self._cancel()
+
+
 class AutoHideScrollbar(tk.Canvas):
     """A rounded scrollbar in a fixed gutter; visibility never resizes the view."""
 

@@ -16,8 +16,8 @@
 
 Files: invoice_desktop/ui_widgets.py、ui.py、__init__.py、README.md、使用说明.txt，构建生成边界说明。
 
-- [ ] 新增比例列宽组件。_widths(available) 从目标 max(available,sum(minimums)) 分配；低于 minimum 的列先固定并从剩余空间／权重移除，余列比例向下取整，剩余像素按最大余数补齐。_apply 仅在实际宽度变化时写列宽；_press/_release/_finish_drag 暂停布局并在原生释放后采集当前宽度为比例，_destroyed 取消回调。所有事件 add="+"，不吞事件。
-- [ ] ui.py 导入并接入：
+- [x] 新增比例列宽组件。_widths(available) 从目标 max(available,sum(minimums)) 分配；低于 minimum 的列先固定并从剩余空间／权重移除，余列比例向下取整，剩余像素按最大余数补齐。_apply 仅在实际宽度变化时写列宽；_press/_release/_finish_drag 暂停布局并在原生释放后采集当前宽度为比例，_destroyed 取消回调。所有事件 add="+"，不吞事件；实际列宽不变时不更新比例。
+- [x] ui.py 导入并接入：
 
 ```python
 weights = (2, 19, 18, 7, 4, 6, 9, 11, 19, 5)
@@ -27,11 +27,11 @@ app.tree.column(name, width=minimum, minwidth=minimum, anchor=anchor, stretch=Fa
 app.detail_columns = ProportionalTreeviewColumns(app.tree, columns, weights, minimums)
 ```
 
-- [ ] 版本 1.1.5，两份用户说明写明截图比例、最小宽度及手动比例仅当前会话有效。
-- [ ] 静态 compile 三个变更 Python、git diff --check，独立只读审查比例算法、总宽／边缘、事件顺序、手动拖动、销毁与既有接口，不运行测试。
+- [x] 版本 1.1.5，两份用户说明写明截图比例、最小宽度及手动比例仅当前会话有效。
+- [x] 静态 compile 三个变更 Python、git diff --check，独立只读审查比例算法、总宽／边缘、事件顺序、手动拖动、销毁与既有接口，不运行测试。修正“无变化点击也更新比例”的 Minor，最终复审无剩余问题。
 
 ## Task 2: 构建、发布和归档核对
 
-- [ ] 检查原发布规则快照及构建绝对路径／重解析点，执行 tools/build.ps1，保留规则选择。只读提取编译归档核对新类、接入参数、源字节码与软件版本，检查两快照哈希／说明和 EXE 哈希。
-- [ ] 检查原程序退出，复制完整构建至唯一暂存目录，核对规则状态／EXE 和原目录状态；再次检查进程后归档旧文件夹并更新原目录，失败时恢复旧目录，不终止用户进程。
+- [x] 检查原发布规则快照及构建绝对路径／重解析点，修正后重新执行 tools/build.ps1，保留规则选择。只读提取编译归档核对新类、接入参数、源字节码与软件版本，检查两快照哈希／说明和 EXE 哈希。
+- [x] 检查原程序退出，复制完整构建至唯一暂存目录，核对规则状态／EXE 和原目录状态；再次检查进程后将旧文件夹归档为 InvoiceSummary-1.1.4-archive，新版放回原目录，不终止用户进程。
 - [ ] 记录并提交实现；从实际发布目录生成 Windows 与 Git 跟踪源码 ZIP，逐成员核对文件字节、规则、说明、校验值；记录提交后重新包装并核对最终源码，Git 状态干净。若原目录意外缺失，使用校验过的旧 ZIP 保留规则，旧 ZIP 继续保留。

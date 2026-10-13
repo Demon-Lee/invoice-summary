@@ -3,7 +3,7 @@ import tkinter as tk
 from tkinter import ttk
 
 from . import __version__
-from .ui_widgets import AutoHideScrollbar, AutoScrollText, ThinProgressbar
+from .ui_widgets import AutoHideScrollbar, AutoScrollText, ProportionalTreeviewColumns, ThinProgressbar
 
 FONT = "Microsoft YaHei UI"
 PALETTE = {
@@ -262,10 +262,11 @@ def build_interface(app, *, execution_steps, necessary_conditions, process_notic
     table.columnconfigure(1, minsize=14)
     columns = ("sequence", "filename", "product_name", "spec", "unit", "quantity", "price", "amount", "manufacturer", "correction")
     app.tree = ttk.Treeview(table, columns=columns, show="headings", height=4)
-    stretch_columns = {"product_name", "spec", "manufacturer"}
-    for name, label, width in zip(columns, ("序号", "PDF → 新文件名", "产品名称", "规格型号", "单位", "数量", "单价（自动）", "含税金额", "生产厂家", "人工校正"), (48, 250, 170, 110, 48, 65, 95, 100, 175, 84)):
+    weights = (2, 19, 18, 7, 4, 6, 9, 11, 19, 5)
+    minimums = (44, 180, 170, 90, 44, 58, 95, 100, 170, 84)
+    for name, label, minimum in zip(columns, ("序号", "PDF → 新文件名", "产品名称", "规格型号", "单位", "数量", "单价（自动）", "含税金额", "生产厂家", "人工校正"), minimums):
         app.tree.heading(name, text=label, anchor="e" if name in ("quantity", "price", "amount") else "w" if name in ("filename", "product_name", "spec", "manufacturer") else "center")
-        app.tree.column(name, width=width, minwidth=width if name in stretch_columns else 40, anchor="e" if name in ("quantity", "price", "amount") else "w" if name in ("filename", "product_name", "spec", "manufacturer") else "center", stretch=name in stretch_columns)
+        app.tree.column(name, width=minimum, minwidth=minimum, anchor="e" if name in ("quantity", "price", "amount") else "w" if name in ("filename", "product_name", "spec", "manufacturer") else "center", stretch=False)
     app.tree.tag_configure("even", background="#ffffff")
     app.tree.tag_configure("odd", background="#f8fafd")
     app.tree.tag_configure("corrected", background="#fff8e5")
@@ -276,6 +277,7 @@ def build_interface(app, *, execution_steps, necessary_conditions, process_notic
     vertical.attach(app.tree, table)
     horizontal.attach(app.tree, table)
     app.tree.configure(yscrollcommand=vertical.set, xscrollcommand=horizontal.set)
+    app.detail_columns = ProportionalTreeviewColumns(app.tree, columns, weights, minimums)
     report_heading = ttk.Frame(process)
     report_heading.grid(row=8, column=0, sticky="ew", pady=(7, 3))
     ttk.Label(report_heading, text="检查、异常与实际结果", font=(FONT, 11, "bold")).pack(side="left")
