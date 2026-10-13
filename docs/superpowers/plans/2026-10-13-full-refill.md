@@ -42,5 +42,5 @@ Files: `docs/release-checks.md`, this plan, `release/InvoiceSummary` and release
 
 - [x] Obtain independent read-only review via requesting-code-review and fix substantive findings without tests.
 - [x] Build with `tools/build.ps1` using the existing build venv; confirm retained engine version and required files.
-- [ ] Commit source changes; safely preserve old release, publish 0.1.4 to `release/InvoiceSummary`, and package from that exact directory using `tools/package_release.py`.
-- [ ] Record publication/build/review evidence and unperformed runtime checks, commit documentation, and regenerate the source package to include final records.
+- [x] Commit source changes; publish 0.1.4 to `release/InvoiceSummary`, and package from that exact directory using `tools/package_release.py`. The previous directory was absent at publication time; the existing 0.1.3 Windows ZIP remains preserved.
+- [x] Record publication/build/review evidence and unperformed runtime checks, commit documentation, and regenerate the source package to include final records.
