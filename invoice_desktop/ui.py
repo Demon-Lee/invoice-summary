@@ -265,8 +265,8 @@ def build_interface(app, *, execution_steps, necessary_conditions, process_notic
     weights = (2, 19, 18, 7, 4, 6, 9, 11, 19, 5)
     minimums = (44, 180, 170, 90, 44, 58, 95, 100, 170, 84)
     for name, label, minimum in zip(columns, ("序号", "PDF → 新文件名", "产品名称", "规格型号", "单位", "数量", "单价（自动）", "含税金额", "生产厂家", "人工校正"), minimums):
-        app.tree.heading(name, text=label, anchor="e" if name in ("quantity", "price", "amount") else "w" if name in ("filename", "product_name", "spec", "manufacturer") else "center")
-        app.tree.column(name, width=minimum, minwidth=minimum, anchor="e" if name in ("quantity", "price", "amount") else "w" if name in ("filename", "product_name", "spec", "manufacturer") else "center", stretch=False)
+        app.tree.heading(name, text=label, anchor="w")
+        app.tree.column(name, width=minimum, minwidth=minimum, anchor="w", stretch=False)
     app.tree.tag_configure("even", background="#ffffff")
     app.tree.tag_configure("odd", background="#f8fafd")
     app.tree.tag_configure("corrected", background="#fff8e5")
