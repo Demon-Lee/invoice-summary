@@ -19,7 +19,7 @@ EXECUTION_STEPS = (
     "1. 选择完整批次的 PDF 文件夹和目标 .xlsx 工作簿。",
     "2. 点击“只读预览”；字段有误可双击明细人工校正。",
     "3. 预览通过后点击“执行处理”，清空旧明细并整批重填。",
-    "4. 查看金额复核结果和临时文件清理状态。",
+    "4. 等待完成提示，查看金额复核与临时文件清理结果。",
 )
 NECESSARY_CONDITIONS = (
     "Windows 10/11，已安装 Microsoft Excel 桌面版。",
@@ -28,8 +28,13 @@ NECESSARY_CONDITIONS = (
     "执行前关闭目标工作簿；软件和输入文件所在目录须可写。",
 )
 PROCESS_NOTICE = "执行会重命名 PDF，清空两表旧明细（含品牌、备注）后整批重填；原位更新，不自动备份。"
-HELP_HEADINGS = ("执行步骤", "必要条件", "人工校正", "工作簿详细要求", "处理与恢复", "识别原则", "规则更新与分发")
+HELP_HEADINGS = ("执行步骤", "必要条件", "阶段提示", "人工校正", "工作簿详细要求", "处理与恢复", "识别原则", "规则更新与分发")
 HELP = "\n".join(("执行步骤", *EXECUTION_STEPS, "", PROCESS_NOTICE, "", "必要条件", *NECESSARY_CONDITIONS)) + """
+
+阶段提示
+操作按钮下方显示当前阶段与下一步。蓝色表示处理中，绿色表示通过，黄色表示预览异常或清理提醒，红色表示操作未完成。只读预览和执行结束时会弹出结果提示，关闭提示后仍可查看页面上的阶段结果与详细报告。
+
+预览完成只表示检查结束；只有“预览通过”才可以执行。人工校正后的检查只更新页面提示。更换输入或更新规则后，须重新预览。
 
 人工校正
 选中一条预览明细，点击“人工校正”或双击该行。对照原 PDF 校正产品名称、规格型号、单位、数量、含税金额和生产厂家，单价自动计算。保存后重新检查金额、文件名和工作簿映射；通过后才可执行。“恢复识别值”可撤销该行校正。
@@ -73,6 +78,7 @@ class App:
             raise ValueError(f"软件文件夹不可写，请完整解压到可写的文件夹后运行：{self.application_dir}") from exc
         self.events = queue.Queue()
         self.busy = False
+        self.operation_stage = None
         self.preview_result = None
         self.controller = None
         self.last_result = None
@@ -81,6 +87,8 @@ class App:
         self.book = tk.StringVar()
         self.status = tk.StringVar(value="选择文件，然后进行只读预览")
         self.summary = tk.StringVar(value="文件在本机处理 · Microsoft Excel 桌面版必需")
+        self.stage_title = tk.StringVar(value="等待只读预览")
+        self.stage_detail = tk.StringVar(value="选择完整批次的 PDF 文件夹和目标工作簿，然后点击“只读预览”。")
         self.version = tk.StringVar()
         self.source_status = tk.StringVar()
         settings = self.state_dir / "settings.json"
@@ -113,7 +121,7 @@ class App:
         icon = resource_root() / "resources/app.ico"
         if icon.exists():
             self.root.iconbitmap(str(icon))
-        self.root.geometry("1140x820")
+        self.root.geometry("1140x900")
         self.root.minsize(900, 760)
         self.root.configure(bg="#f4f7fb")
         style = ttk.Style()
@@ -170,7 +178,19 @@ class App:
         self.correct_button.configure(state="disabled")
         self._button(buttons, "打开发票目录", lambda: self._open(self.pdf.get())).pack(side="left", padx=(0, 8))
         self._button(buttons, "打开工作簿", lambda: self._open(self.book.get())).pack(side="left")
-        ttk.Label(process, textvariable=self.summary, wraplength=950).grid(row=4, column=0, columnspan=3, sticky="w", pady=(8, 4))
+        self.stage_card = tk.Frame(process, padx=12, pady=6, highlightthickness=1)
+        self.stage_card.grid(row=4, column=0, columnspan=3, sticky="ew", pady=(4, 4))
+        self.stage_heading = tk.Label(self.stage_card, textvariable=self.stage_title, font=("Microsoft YaHei UI", 14, "bold"), anchor="w", justify="left")
+        self.stage_heading.pack(fill="x")
+        self.stage_body = tk.Label(self.stage_card, textvariable=self.stage_detail, font=("Microsoft YaHei UI", 10), anchor="w", justify="left", wraplength=900)
+        self.stage_body.pack(fill="x", pady=(2, 0))
+        self.stage_summary = tk.Label(self.stage_card, textvariable=self.summary, font=("Microsoft YaHei UI", 9), anchor="w", justify="left", wraplength=900)
+        self.stage_summary.pack(fill="x", pady=(2, 0))
+        def wrap_stage(event):
+            for label in (self.stage_heading, self.stage_body, self.stage_summary):
+                label.configure(wraplength=max(180, event.width - 26))
+        self.stage_card.bind("<Configure>", wrap_stage)
+        self._set_stage("idle", self.stage_title.get(), self.stage_detail.get())
         ttk.Label(process, text="完整批次明细 · 双击一行可人工校正 · 校正后重新检查").grid(row=5, column=0, columnspan=3, sticky="w", pady=(6, 4))
         table = ttk.Frame(process)
         table.grid(row=6, column=0, columnspan=3, sticky="nsew")
@@ -243,6 +263,28 @@ class App:
         widget.insert("1.0", value)
         widget.configure(state="disabled")
 
+    def _set_stage(self, tone, title, detail):
+        background, foreground, border = {
+            "idle": ("#edf1f5", "#435367", "#c4ccd6"),
+            "working": ("#eaf3ff", "#173b68", "#76a6db"),
+            "success": ("#e8f5eb", "#205d32", "#6aab7a"),
+            "warning": ("#fff4dc", "#79520e", "#c79939"),
+            "error": ("#fdecea", "#962c25", "#ce776e"),
+        }[tone]
+        self.stage_title.set(title)
+        self.stage_detail.set(detail)
+        self.stage_card.configure(bg=background, highlightbackground=border, highlightcolor=border)
+        for label in (self.stage_heading, self.stage_body, self.stage_summary):
+            label.configure(bg=background, fg=foreground)
+
+    def _complete_stage(self, tone, title, detail, *, notify=False, reason=None):
+        self._set_stage(tone, title, detail)
+        self.status.set(title)
+        if notify:
+            show = messagebox.showerror if tone == "error" else messagebox.showwarning if tone == "warning" else messagebox.showinfo
+            message = detail + ("\n\n" + reason if reason else "")
+            show(title, message, parent=self.root)
+
     def _pick_pdf(self):
         value = filedialog.askdirectory(title="选择完整批次的发票 PDF 文件夹")
         if value:
@@ -262,6 +304,9 @@ class App:
         self.preview_result = None
         self.execute.configure(state="disabled")
         self.correct_button.configure(state="disabled")
+        self._set_stage("idle", "需要重新预览", "输入或规则已变更；请点击“只读预览”，完成检查后再执行。")
+        self.status.set("需要重新预览")
+        self.summary.set("完成新的只读预览后，将显示发票数量、明细数量和金额。")
 
     def _source_changed(self, *_):
         self._invalidate()
@@ -293,8 +338,11 @@ class App:
             return value
 
     def _periodic_source(self):
-        if not self.busy and self._check_source():
-            self._invalidate()
+        if not self.busy:
+            error = self._check_source()
+            if error:
+                self._invalidate()
+                self._complete_stage("warning", "识别规则需要同步", "请到“规则与更新”同步规则，然后重新进行只读预览。")
         self.root.after(3000, self._periodic_source)
 
     def _refresh_version(self):
@@ -302,10 +350,15 @@ class App:
         self._set_text(self.rule_text, (self.store.active() / "SKILL.md").read_text(encoding="utf-8"))
         self._check_source()
 
-    def _run(self, work, done):
+    def _run(self, work, done, *, stage=None):
         if self.busy:
             return
         self.busy = True
+        self.operation_stage = stage
+        if stage:
+            title = {"preview": "正在只读预览…", "correction": "正在检查人工校正…", "execute": "正在执行处理…"}[stage]
+            self._set_stage("working", title, "请等待本阶段结束；完成后会显示结果与下一步。")
+            self.status.set(title)
         self.execute.configure(state="disabled")
         for widget in self.interactive:
             widget.configure(state="disabled")
@@ -323,7 +376,11 @@ class App:
                 event = self.events.get_nowait()
                 if event[0] == "progress":
                     self.status.set(event[1])
+                    if self.operation_stage:
+                        self.stage_detail.set(event[1])
                     continue
+                stage = self.operation_stage
+                self.operation_stage = None
                 self.busy = False
                 self.progress_bar.stop()
                 for widget in self.interactive:
@@ -336,7 +393,11 @@ class App:
                     self._invalidate()
                     self.status.set("未完成，请查看原因")
                     self._set_text(self.report, event[1])
-                    messagebox.showerror("处理未完成", event[1])
+                    if stage:
+                        title = {"preview": "只读预览未完成", "correction": "校正检查未完成", "execute": "执行处理未完成"}[stage]
+                        self._complete_stage("error", title, "请查看下方原因，解决问题后重新进行只读预览。", notify=True, reason=event[1])
+                    else:
+                        messagebox.showerror("操作未完成", event[1], parent=self.root)
         except queue.Empty:
             pass
         self.root.after(100, self._poll)
@@ -344,14 +405,16 @@ class App:
     def _preview(self):
         error = self._check_source()
         if error:
+            self._invalidate()
+            self._complete_stage("warning", "识别规则需要同步", "请到“规则与更新”同步规则，然后重新进行只读预览。")
             messagebox.showinfo("规则需要同步", error)
             return
         self._invalidate()
         directory, book = self.pdf.get(), self.book.get()
         self.controller = Controller(self.store.active(), lambda msg: self.events.put(("progress", msg)), state_dir=self.state_dir / "runs")
-        self._run(lambda: self.controller.preview(directory, book), self._render_preview)
+        self._run(lambda: self.controller.preview(directory, book), lambda preview: self._render_preview(preview, notify=True), stage="preview")
 
-    def _render_preview(self, preview):
+    def _render_preview(self, preview, *, notify=False):
         self.preview_result = preview
         self._render_table(preview.payload, corrections=preview.corrections)
         self.correct_button.configure(state="normal" if preview.payload.get("records") and not preview.resume_pending else "disabled")
@@ -372,6 +435,14 @@ class App:
         self._set_text(self.report, "\n".join(parts))
         if preview.clean and preview.has_changes:
             self.execute.configure(state="normal")
+        phase = "只读预览" if notify else "校正检查"
+        if not preview.clean:
+            self._complete_stage("warning", f"{phase}完成，发现 {len(preview.issues)} 项异常", "暂不能执行。请查看下方异常，校正字段或解决问题后重新检查。", notify=notify, reason=preview.issues[0])
+        elif preview.has_changes:
+            next_step = "检测到上次处理未完成，点击“执行处理”继续。" if preview.resume_pending else "文件尚未改动；核对明细后点击“执行处理”。"
+            self._complete_stage("success", f"{phase}完成，预览通过", next_step, notify=notify, reason=self.summary.get())
+        else:
+            self._complete_stage("success", f"{phase}完成，无需处理", "没有可重填明细；可选择其他批次重新预览。", notify=notify)
 
     def _render_table(self, payload, renamed=None, corrections=None):
         self.tree.delete(*self.tree.get_children())
@@ -468,7 +539,7 @@ class App:
                     return
             controller = self.controller
             dialog.destroy()
-            self._run(lambda: controller.correct(preview, record_index, row_index, values), self._render_preview)
+            self._run(lambda: controller.correct(preview, record_index, row_index, values), self._render_preview, stage="correction")
         actions = ttk.Frame(frame)
         actions.grid(row=11, column=0, columnspan=3, sticky="w")
         for label, action in (("保存并检查", save), ("恢复识别值", lambda: save(True)), ("打开原发票", lambda: self._open(record["pdf"])), ("取消", dialog.destroy)):
@@ -481,16 +552,18 @@ class App:
         error = self._check_source()
         if error:
             self._invalidate()
+            self._complete_stage("warning", "识别规则需要同步", "请到“规则与更新”同步规则，然后重新进行只读预览。")
             messagebox.showinfo("规则需要同步", error)
             return
-        self._run(lambda: self.controller.apply(preview), self._render_result)
+        self._run(lambda: self.controller.apply(preview), self._render_result, stage="execute")
 
     def _render_result(self, result):
         self.last_result = result
         self.preview_result = None
         self.correct_button.configure(state="disabled")
         self._render_table(result["payload"], result.get("rename_plan"), result.get("corrections"))
-        parts = ["处理完成，逐分金额验证通过。" if result["status"] == "completed" else "处理未完成。", "已执行：" + "、".join(result.get("completed", []))]
+        outcome = "处理完成，逐分金额验证通过。" if result["status"] == "completed" else "无需处理，未改动文件。" if result["status"] == "no_change" else "处理未完成。"
+        parts = [outcome, "已执行：" + "、".join(result.get("completed", []))]
         parts.extend(self._correction_lines(result.get("original_payload", {}), result.get("corrections", {})))
         if result.get("error"):
             parts.append(result["error"])
@@ -509,6 +582,17 @@ class App:
         parts.append("临时文件清理：" + result["cleanup"])
         parts.append("继续处理前请重新进行只读预览。")
         self._set_text(self.report, "\n".join(parts))
+        if result["status"] == "completed":
+            if result["cleanup"] == "完成":
+                detail = f"金额核对通过（本批合计 ¥{result['total']}），临时文件已清理。可点击“打开工作簿”查看结果。"
+                self._complete_stage("success", "执行处理完成", detail, notify=True)
+            else:
+                self._complete_stage("warning", "处理完成，临时文件清理未完成", "填表和金额核对已完成；请查看下方清理原因。继续处理前请重新预览。", notify=True, reason=result["cleanup"])
+        elif result["status"] == "no_change":
+            self._complete_stage("success", "执行阶段结束，无需处理", "未改动文件；继续处理前请重新进行只读预览。", notify=True)
+        else:
+            reason = result.get("error") or "请查看下方“检查、异常与实际结果”中的具体原因。"
+            self._complete_stage("error", "执行处理未完成", "部分步骤可能已完成；解决原因后重新预览，可继续未完成的处理。", notify=True, reason=reason)
 
     def _sync(self):
         source = self.source.get().strip()
