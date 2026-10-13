@@ -16,7 +16,7 @@
 
 Files: invoice_desktop/ui.py、__init__.py、README.md、使用说明.txt、自动生成边界说明。
 
-- [ ] 原列配置改为：
+- [x] 原列配置改为：
 
 ```python
 stretch_columns = {"product_name", "spec", "manufacturer"}
@@ -25,14 +25,14 @@ minwidth=width if name in stretch_columns else 40
 stretch=name in stretch_columns
 ```
 
-- [ ] 版本 1.1.4，说明文件名默认宽度、额外空间分配和手动拖动边界。
-- [ ] compile 静态检查两个变更 Python；git diff --check；独立只读审查分配、最小宽度、手动边界和原接口，不运行测试。
+- [x] 版本 1.1.4，说明文件名默认宽度、额外空间分配和手动拖动边界。
+- [x] compile 静态检查两个变更 Python；git diff --check；独立只读审查分配、最小宽度、手动边界和原接口，不运行测试。
 
 ## Task 2: 构建和发布
 
 Files: dist、release（忽略目录）；docs/release-checks.md。
 
-- [ ] 原目录存在时保留已选规则；不存在时核对 1.1.3 ZIP SHA256、快照白名单及各文件哈希，仅恢复规则到 .superpowers 下的新目录。
-- [ ] 执行 release_assets.py 和原 PyInstaller 命令；prepare_portable.py --preserve 指向已核对来源，复制两份说明和许可。读取编译归档确认版本和新列参数；核对规则和 EXE 哈希。
-- [ ] 原程序未运行时将构建复制至 release 下唯一暂存目录；再次核对 EXE／规则、进程及目标状态，旧文件夹存在则归档后更新，缺失则直接重建原目录；保留旧 ZIP。
+- [x] 原目录不存在，核对 1.1.3 ZIP SHA256、快照白名单及各文件哈希，仅恢复规则到 .superpowers 下的新目录。
+- [x] 执行 release_assets.py 和原 PyInstaller 命令；prepare_portable.py --preserve 指向已核对来源，复制两份说明和许可。读取编译归档确认版本和新列参数；核对规则和 EXE 哈希。
+- [x] 原程序未运行时将构建复制至 release 下唯一暂存目录；再次核对 EXE／规则、进程及目标状态，原目录缺失，直接重建原目录；保留旧 ZIP。
 - [ ] 提交实现、从实际发布目录生成两份 ZIP，读取每个成员与发布／跟踪源码逐字节对应，核对规则及 SHA256.json，记录并提交；再包装并核对最终源码，Git 状态干净。

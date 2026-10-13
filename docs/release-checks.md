@@ -166,3 +166,13 @@
 - 发布前两次检查原路径程序未运行，检查绝对路径、重解析点、暂存 EXE 及规则状态；原目录仍不存在，已将完整 1.1.3 放回 D:\Workspace\发票专题\invoice-desktop\release\InvoiceSummary，旧 ZIP 保留，没有虚构旧文件夹归档。发布／构建 EXE SHA256 同为 4ee4be1052af729c55618ed11e2f74b10723ee620ba506ddb41645a322c8a0d2，两份说明版本正确。
 - 实现提交为 358dfa4。从实际发布目录打包发票汇总助手-1.1.3-Windows.zip（40,685,227 字节、1308 项）和源码 ZIP（102 项），逐文件读取字节核对发布目录／Git 跟踪的当前源码，两个快照文件哈希与清单一致，未包含业务 PDF／工作簿。Windows ZIP SHA256 为 65c702d03257a55c8edf712cda05db56fb974b182c127ac9bae8b5a17bad3985，校验值记录于 release/SHA256.json；完成记录提交后重新包装源码，使压缩包包含最终文档。
 - 本次没有新增或运行测试，没有启动 GUI、诊断、同步／导入接口或实际 PDF／Excel 流程。实际拖动手感、隐藏时机、动画和 Windows 显示缩放尚未运行确认；构建和静态复审不等于界面交互或视觉运行验证。
+
+## 1.1.4：全屏明细列宽分配
+
+- 用户反馈全屏时 PDF → 新文件名列占用过大。源码确认旧配置仅 filename 允许 stretch，窗口新增宽度全部分给文件名列。现改为产品名称、规格型号、生产厂家三列 stretch；文件名默认 250px，不自动拉伸。三项可伸缩列最低宽度为 170、110、175px，避免较窄窗口挤成 40px；默认列宽、顺序、数值对齐和原生手动拖动边界保留，空间不足使用原自动隐藏横向滚动。
+- 修改仅 ui.py 列配置、版本及说明，软件版本 1.1.4。App、ui_widgets、业务模块和 engine 无差异；没有改 skill、业务 PDF 或工作簿。两份用户说明和右上角版本对应。
+- 独立只读审查 41f4f3d → 最新工作区，结合原生 Treeview 的伸缩与拖动实现核对最小宽度、手动调整及横向滚动，未发现 Critical / Important / Minor。两个变更 Python 静态语法编译和 diff 空白检查通过，没有运行测试或 GUI。
+- 原发布目录仍不存在，核对保留的 1.1.3 Windows ZIP SHA256 65c702d03257a55c8edf712cda05db56fb974b182c127ac9bae8b5a17bad3985，仅将规则状态及白名单快照恢复至忽略目录，并逐文件校验清单哈希。构建沿用原 release_assets、PyInstaller 参数及 prepare_portable，以该已核对目录为 preserve 来源，没有回退到本机旧规则。
+- Windows 构建退出 0；只读提取编译归档确认版本 1.1.4、三列伸缩集合与 minwidth／stretch 变更。归档 build_interface 字节码与当前源码编译结果对应，未执行模块代码。当前规则保持 6b9e6cdafb3f、上一规则 42334e9f238e，两份快照及源 skill 共享文件哈希一致。
+- 发布前两次确认原路径程序未运行，检查绝对目标、重解析点、暂存 EXE 与规则状态。原目录仍缺失，已将 1.1.4 放回 D:\Workspace\发票专题\invoice-desktop\release\InvoiceSummary，旧 ZIP 保留。构建／暂存／发布 EXE SHA256 同为 fbc5875c6afaff7c8aced7c2a968486db7e32995283747a5e1a7d44849717a24，两份说明为 1.1.4。
+- 本次未新增或运行测试，未启动 GUI、诊断、同步／导入接口或实际 PDF／Excel 流程。全屏、Windows 缩放、手动调整与窄窗口显示尚未运行确认；静态审查、编译归档与构建不等于界面运行验证。

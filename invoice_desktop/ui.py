@@ -262,9 +262,10 @@ def build_interface(app, *, execution_steps, necessary_conditions, process_notic
     table.columnconfigure(1, minsize=14)
     columns = ("sequence", "filename", "product_name", "spec", "unit", "quantity", "price", "amount", "manufacturer", "correction")
     app.tree = ttk.Treeview(table, columns=columns, show="headings", height=4)
+    stretch_columns = {"product_name", "spec", "manufacturer"}
     for name, label, width in zip(columns, ("序号", "PDF → 新文件名", "产品名称", "规格型号", "单位", "数量", "单价（自动）", "含税金额", "生产厂家", "人工校正"), (48, 250, 170, 110, 48, 65, 95, 100, 175, 84)):
         app.tree.heading(name, text=label, anchor="e" if name in ("quantity", "price", "amount") else "w" if name in ("filename", "product_name", "spec", "manufacturer") else "center")
-        app.tree.column(name, width=width, minwidth=40, anchor="e" if name in ("quantity", "price", "amount") else "w" if name in ("filename", "product_name", "spec", "manufacturer") else "center", stretch=name == "filename")
+        app.tree.column(name, width=width, minwidth=width if name in stretch_columns else 40, anchor="e" if name in ("quantity", "price", "amount") else "w" if name in ("filename", "product_name", "spec", "manufacturer") else "center", stretch=name in stretch_columns)
     app.tree.tag_configure("even", background="#ffffff")
     app.tree.tag_configure("odd", background="#f8fafd")
     app.tree.tag_configure("corrected", background="#fff8e5")
