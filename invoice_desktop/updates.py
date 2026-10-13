@@ -14,7 +14,9 @@ import tempfile
 import zipfile
 from pathlib import Path
 
-from .policy import SHARED_FILES, shared_scope, validate_scope
+from .policy import (SHARED_FILES, LEGACY_SHARED_FILES, shared_scope, validate_scope, snapshot_files,
+                     LEGACY_WRITER_SHA256, TEMPLATE_WRITER_SHA256)
+from .template_rules import read_template_rules
 
 FILES = SHARED_FILES
 MAX_BYTES = 8 * 1024 * 1024
@@ -30,7 +32,8 @@ def sha256(path):
 
 def source_files(skill_dir):
     root = Path(skill_dir).resolve()
-    result = {name: root / name if name == "SKILL.md" else root / "scripts" / name for name in FILES}
+    names = SHARED_FILES if (root / "scripts/template_rules.json").is_file() else LEGACY_SHARED_FILES
+    result = {name: root / name if name == "SKILL.md" else root / "scripts" / name for name in names}
     writer = root / "scripts/write_summary.mjs"
     for path in (*result.values(), writer):
         if not path.is_file():
@@ -42,14 +45,17 @@ def manifest_for_skill(skill_dir):
     files, writer = source_files(skill_dir)
     hashes = {name: sha256(path) for name, path in files.items()}
     marker = sha256(writer)
-    manifest = {"format_version": 2, "files": hashes, "source_writer_sha256": marker, "scope": shared_scope()}
+    format_version = 3 if "template_rules.json" in files else 2
+    if format_version == 3:
+        read_template_rules(files["template_rules.json"])
+    manifest = {"format_version": format_version, "files": hashes, "source_writer_sha256": marker, "scope": shared_scope(format_version)}
     manifest["version"] = _snapshot_version(manifest)
     return manifest
 
 
 def _snapshot_version(manifest):
     values = [manifest["files"], manifest["source_writer_sha256"]]
-    if manifest["format_version"] == 2:
+    if manifest["format_version"] >= 2:
         values.append(manifest["scope"])
     return hashlib.sha256(json.dumps(values, sort_keys=True).encode()).hexdigest()[:12]
 
@@ -60,7 +66,7 @@ def read_manifest(directory):
     if not isinstance(manifest, dict):
         raise ValueError("更新包清单必须为对象")
     validate_scope(manifest)
-    if (not isinstance(manifest.get("files"), dict) or set(manifest["files"]) != set(FILES)
+    if (not isinstance(manifest.get("files"), dict) or set(manifest["files"]) != set(snapshot_files(manifest))
             or not re.fullmatch(r"[a-f0-9]{12}", str(manifest.get("version", "")))
             or not re.fullmatch(r"[a-f0-9]{64}", str(manifest.get("source_writer_sha256", "")))):
         raise ValueError("更新包格式不兼容，需要升级主程序")
@@ -71,6 +77,8 @@ def read_manifest(directory):
     expected = _snapshot_version(manifest)
     if expected != manifest["version"]:
         raise ValueError("更新版本完整性检查失败")
+    if manifest["format_version"] == 3:
+        read_template_rules(root / "template_rules.json")
     return manifest
 
 
@@ -162,12 +170,15 @@ def _validate_output_contract(modules):
 
 def check_application_contract(candidate, supported):
     validate_scope(candidate)
-    if candidate["source_writer_sha256"] != supported["source_writer_sha256"]:
-        raise ValueError("skill 写表组件已变化，须核对共享字段和模板约定并升级软件后再同步；软件的人工校正和清空重填策略会保留。")
+    expected = TEMPLATE_WRITER_SHA256 if candidate["format_version"] == 3 else LEGACY_WRITER_SHA256
+    if candidate["source_writer_sha256"] != expected:
+        raise ValueError("skill 写表组件发生了软件尚未支持的变化，须适配软件后再同步。受支持的模板规则文件可直接同步；人工校正和清空重填策略会保留。")
 
 
 def changed_files(candidate, baseline):
-    changed = [name for name in FILES if candidate["files"][name] != baseline["files"][name]]
+    changed = [name for name in FILES if candidate["files"].get(name) != baseline["files"].get(name)]
+    if candidate["source_writer_sha256"] != baseline["source_writer_sha256"]:
+        changed.append("write_summary.mjs")
     if (candidate["format_version"] != baseline["format_version"]
             or candidate.get("scope") != baseline.get("scope")):
         changed.append("manifest.json")
@@ -176,7 +187,7 @@ def changed_files(candidate, baseline):
 
 def check_compatible(candidate, baseline):
     check_application_contract(candidate, baseline)
-    changed = [name for name in FILES if candidate["files"][name] != baseline["files"][name]]
+    changed = [name for name in FILES if candidate["files"].get(name) != baseline["files"].get(name)]
     if changed == ["SKILL.md"]:
         raise ValueError("只有规则说明变化，尚无对应脚本改进；请完成 skill 脚本适配后再同步")
     return changed_files(candidate, baseline)
@@ -188,6 +199,7 @@ def export_update(skill_dir, output, baseline=None):
     if output in [p.resolve() for p in (*paths.values(), writer)] or output.suffix.lower() != ".zip":
         raise ValueError("更新包必须是独立的 .zip 文件，不能覆盖 skill 源文件")
     manifest = manifest_for_skill(skill_dir)
+    check_application_contract(manifest, baseline)
     if baseline is not None:
         check_compatible(manifest, baseline)
     with tempfile.TemporaryDirectory(prefix="invoice-export-") as temp:
@@ -238,7 +250,7 @@ class EngineStore:
             error = None
         except ValueError as exc:
             changed = changed_files(candidate, baseline)
-            if candidate["source_writer_sha256"] != baseline["source_writer_sha256"]:
+            if candidate["source_writer_sha256"] != baseline["source_writer_sha256"] and "write_summary.mjs" not in changed:
                 changed.append("write_summary.mjs")
             error = str(exc)
         return {"changed": changed, "error": error, "version": candidate["version"]}
@@ -255,7 +267,8 @@ class EngineStore:
             extracted.mkdir()
             with zipfile.ZipFile(archive_path) as archive:
                 names = archive.namelist()
-                if set(names) != set(FILES) | {"manifest.json"} or len(names) != len(set(names)):
+                allowed = (set(LEGACY_SHARED_FILES) | {"manifest.json"}, set(SHARED_FILES) | {"manifest.json"})
+                if set(names) not in allowed or len(names) != len(set(names)):
                     raise ValueError("更新包包含不允许的路径或缺少必要文件")
                 if sum(item.file_size for item in archive.infolist()) > MAX_BYTES:
                     raise ValueError("更新包超过允许大小")
@@ -264,6 +277,8 @@ class EngineStore:
                         raise ValueError("更新包包含不允许的文件类型")
                     (extracted / item.filename).write_bytes(archive.read(item))
             manifest = read_manifest(extracted)
+            if set(names) != set(snapshot_files(manifest)) | {"manifest.json"}:
+                raise ValueError("更新包文件与其声明的规则格式不一致")
             before = read_manifest(self.active())
             check_application_contract(manifest, read_manifest(self.bundled))
             changed = check_compatible(manifest, before)

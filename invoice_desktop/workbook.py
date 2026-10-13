@@ -18,6 +18,7 @@ from openpyxl.utils import column_index_from_string, get_column_letter
 from openpyxl.worksheet.cell_range import CellRange
 from openpyxl.worksheet.print_settings import PrintArea
 from openpyxl.workbook.properties import CalcProperties
+from .template_rules import minimum_retained_row
 
 HEADERS = ("序号", "产品名称", "规格型号", "单位", "数量", "单价", "金额")
 SIGNERS = {"验收": ("经办人", "验收人"), "领用": ("保管人", "领用人")}
@@ -195,10 +196,10 @@ def _same_margin_cell(actual, expected):
             and link_value(actual.hyperlink) == link_value(expected.hyperlink))
 
 
-def _matches_sheet(ws, header, columns, footer, rows, last_column=None):
+def _matches_sheet(ws, header, columns, footer, rows, last_column=None, minimum_row=None):
     """Recognize an already-written pending refill, without authorizing normal skips."""
     last_column = last_column or _detail_last_column(ws, header, columns)
-    if footer != header + len(rows) + 1:
+    if footer != max(header + len(rows), minimum_row or header) + 1:
         return False
     for r, expected in enumerate(rows, header + 1):
         for label in ("序号", "数量", "金额"):
@@ -229,6 +230,9 @@ def _matches_sheet(ws, header, columns, footer, rows, last_column=None):
                 return False
             if cell.column not in columns.values() and cell.value is not None:
                 return False
+    for row in ws.iter_rows(min_row=header+len(rows)+1, max_row=footer-1, max_col=last_column):
+        if any(c.value is not None or c.comment is not None or c.hyperlink is not None for c in row):
+            return False
     for label in ("数量", "金额"):
         letter = get_column_letter(columns[label])
         cell = ws.cell(footer, columns[label])
@@ -349,9 +353,10 @@ class WorkbookPlan:
     rows_to_fill: int = 0
     workbook_matches: bool = False
     fixed_margins: dict = field(default_factory=dict)
+    template_rules: object = None
 
 
-def plan_workbook(path, payload, run_date=None):
+def plan_workbook(path, payload, run_date=None, *, template_rules=None):
     path = Path(path).resolve()
     if path.suffix.lower() != ".xlsx" or not path.is_file():
         raise ValueError("请选择现有的 .xlsx 工作簿")
@@ -377,10 +382,15 @@ def plan_workbook(path, payload, run_date=None):
             ws = wb[name]
             header, columns, footer, date_col = inspect_sheet(ws)
             last_column = _detail_last_column(ws, header, columns)
+            minimum_row = minimum_retained_row(ws, header, last_column, template_rules)
+            if minimum_row is not None and footer <= minimum_row:
+                raise ValueError(f"{name} 侧边标识结束于第 {minimum_row} 行，但合计在第 {footer} 行；请恢复完整模板，使合计位于侧边文字之后")
+            last = max(header + len(rows), minimum_row or header)
+            required_rows = last - header
             fixed_areas[name] = (header, last_column)
             margin = _capture_margin(ws, header, last_column)
             original_print_ranges = [copy(rng) for rng in PrintArea.from_string(ws.print_area).ranges] if ws.print_area else []
-            if len(rows) != footer-header-1 and any(rng.max_col > last_column and rng.max_row > header for rng in ws.merged_cells.ranges):
+            if required_rows != footer-header-1 and any(rng.max_col > last_column and rng.max_row > header for rng in ws.merged_cells.ranges):
                 raise ValueError(f"{name} 主表右侧固定区域存在合并单元格，无法安全增减明细行，请调整模板")
             original_footer, original_max_row = footer, ws.max_row
             template_row = header + 1
@@ -388,11 +398,11 @@ def plan_workbook(path, payload, run_date=None):
                 raise ValueError(f"{name} 缺少可继承格式的明细行，请使用含空白明细行的模板")
             template_styles = [copy(c._style) for c in ws[template_row]]
             template_height = ws.row_dimensions[template_row].height
-            matching.append(_matches_sheet(ws, header, columns, footer, rows, last_column))
+            matching.append(_matches_sheet(ws, header, columns, footer, rows, last_column, minimum_row))
             old_count = sum(_populated(ws, r, last_column) for r in range(header+1, footer))
             added_counts.append(max(0, len(rows) - old_count))
             discarded.update((name, r, col) for sheet, r, col, value in formulas if sheet == name and header < r < original_footer and col <= last_column)
-            expansion = max(0, len(rows) - (footer-header-1))
+            expansion = max(0, required_rows - (footer-header-1))
             _shift_rows(ws, footer, expansion, fixed_areas[name])
             footer += expansion
             for r in range(header+1, footer):
@@ -416,7 +426,6 @@ def plan_workbook(path, payload, run_date=None):
                     align = copy(cell.alignment)
                     align.horizontal = align.vertical = "center"
                     cell.alignment = align
-            last = header + len(rows)
             count = footer-last-1
             removed[name] = count
             _shift_rows(ws, footer, -count, fixed_areas[name])
@@ -433,7 +442,7 @@ def plan_workbook(path, payload, run_date=None):
                 letter = get_column_letter(columns[label])
                 ws.cell(footer, columns[label], f"=SUM({letter}{header+1}:{letter}{footer-1})" if footer > header+1 else "=0")
             ws.cell(footer+1, date_col, date_text)
-            details[name] = {"headerRow": header, "footerRow": footer, "columns": columns, "detailLastColumn": last_column, "fixedTextCellsToPreserve": sum(c.value is not None for c in margin.values()), "rowsToAdd": added_counts[-1], "rowsToCorrect": 0, "blankRowsToRemove": count, "oldRowsToClear": old_count, "rowsToFill": len(rows)}
+            details[name] = {"headerRow": header, "footerRow": footer, "columns": columns, "detailLastColumn": last_column, "fixedTextCellsToPreserve": sum(c.value is not None for c in margin.values()), "rowsToAdd": added_counts[-1], "rowsToCorrect": 0, "blankRowsToRemove": count, "oldRowsToClear": old_count, "rowsToFill": len(rows), "minimumRetainedRow": minimum_row, "requiredBlankRows": last-header-len(rows)}
             inspect_sheet(ws)
         moved = any(old != new for mapping in row_maps.values() for old, new in mapping.items())
         if moved:
@@ -449,7 +458,7 @@ def plan_workbook(path, payload, run_date=None):
         for name, (header, last_column) in fixed_areas.items():
             margins[name] = _capture_margin(wb[name], header, last_column)
         wb.calculation = CalcProperties(calcId=0, fullCalcOnLoad=True, forceFullCalc=True)
-        return WorkbookPlan(path, wb, max(added_counts), removed, sum((r["amount"] for r in rows), Decimal("0.00")), details, rows_to_fill=len(rows), workbook_matches=all(matching), fixed_margins=margins)
+        return WorkbookPlan(path, wb, max(added_counts), removed, sum((r["amount"] for r in rows), Decimal("0.00")), details, rows_to_fill=len(rows), workbook_matches=all(matching), fixed_margins=margins, template_rules=template_rules)
     except Exception:
         wb.close()
         raise
@@ -466,8 +475,17 @@ def write_workbook(plan):
             for name in SIGNERS:
                 header, columns, footer, date_col = inspect_sheet(check[name])
                 last_column = _detail_last_column(check[name], header, columns)
-                if footer > header+1 and not _populated(check[name], footer-1, last_column):
-                    raise ValueError(f"{name} 写后仍有多余末尾空行")
+                details = plan.sheet_details[name]
+                minimum_row = minimum_retained_row(check[name], header, last_column, plan.template_rules)
+                expected_last = max(header+details["rowsToFill"], details["minimumRetainedRow"] or header)
+                if (header != details["headerRow"] or footer != expected_last+1
+                        or minimum_row != details["minimumRetainedRow"]):
+                    raise ValueError(f"{name} 写后明细保留区或页脚位置不符合计划，未替换原工作簿")
+                if not _populated(check[name], header+details["rowsToFill"], last_column):
+                    raise ValueError(f"{name} 写后末条明细缺失，未替换原工作簿")
+                for row in check[name].iter_rows(min_row=header+details["rowsToFill"]+1, max_row=footer-1, max_col=last_column):
+                    if any(c.value is not None or c.comment is not None or c.hyperlink is not None for c in row):
+                        raise ValueError(f"{name} 必要空白明细行存在非空内容，未替换原工作簿")
                 for label in ("数量", "金额"):
                     letter = get_column_letter(columns[label])
                     expected = f"=SUM({letter}{header+1}:{letter}{footer-1})" if footer > header+1 else "=0"

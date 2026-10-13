@@ -18,6 +18,7 @@ from pathlib import Path
 from .updates import read_manifest, sha256
 from .workbook import plan_workbook, write_workbook, number
 from .corrections import apply_corrections, row_changes
+from .template_rules import load_template_rules
 
 WRITE_MODE = "replace-details-v1"
 
@@ -317,7 +318,7 @@ class Controller:
                 if any(r.get("sequence") != record["sequence"] for r in record["rows"]):
                     raise ValueError("同一发票的明细序号不一致")
             self.progress("正在检查工作簿表头、页脚和明细映射…")
-            writer_plan = plan_workbook(result.workbook, data)
+            writer_plan = plan_workbook(result.workbook, data, template_rules=load_template_rules(self.engine_dir))
             result.rows_to_add, result.rows_to_correct = writer_plan.rows_to_add, writer_plan.rows_to_correct
             result.rows_to_fill, result.workbook_matches = writer_plan.rows_to_fill, writer_plan.workbook_matches
             result.blank_rows_to_remove, result.sheet_details = writer_plan.blank_rows_to_remove, writer_plan.sheet_details
@@ -380,7 +381,7 @@ class Controller:
             try:
                 records = scratch / "preview.json"
                 records.write_text(json.dumps(preview.payload, ensure_ascii=False), encoding="utf-8")
-                writer_plan = plan_workbook(preview.workbook, preview.payload)
+                writer_plan = plan_workbook(preview.workbook, preview.payload, template_rules=load_template_rules(self.engine_dir))
                 skip_write = preview.resume_pending and pending_state.get("workbook_written") and writer_plan.workbook_matches
                 if preview.fingerprints != self._fingerprints(preview.pdf_dir, preview.workbook):
                     writer_plan.workbook.close()

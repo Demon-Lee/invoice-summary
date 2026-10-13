@@ -8,7 +8,7 @@ from pathlib import Path
 from openpyxl import Workbook
 
 from .controller import Controller
-from .updates import sha256, EngineStore, FILES, read_manifest
+from .updates import sha256, EngineStore, read_manifest, _snapshot_version
 
 
 def update_smoke(engine_dir):
@@ -17,15 +17,16 @@ def update_smoke(engine_dir):
         candidate = root / "candidate"
         candidate.mkdir()
         manifest = read_manifest(engine_dir)
-        for name in FILES:
+        files = tuple(manifest["files"])
+        for name in files:
             shutil.copyfile(Path(engine_dir) / name, candidate / name)
         with (candidate / "invoice_pipeline.py").open("a", encoding="utf-8") as stream:
             stream.write("\n# release update compatibility check\n")
-        manifest["files"] = {name: sha256(candidate / name) for name in FILES}
-        manifest["version"] = hashlib.sha256(json.dumps([manifest["files"], manifest["source_writer_sha256"]], sort_keys=True).encode()).hexdigest()[:12]
+        manifest["files"] = {name: sha256(candidate / name) for name in files}
+        manifest["version"] = _snapshot_version(manifest)
         archive = root / "update.zip"
         with zipfile.ZipFile(archive, "w") as zipped:
-            for name in FILES:
+            for name in files:
                 zipped.write(candidate / name, name)
             zipped.writestr("manifest.json", json.dumps(manifest))
         store = EngineStore(root / "state", engine_dir)

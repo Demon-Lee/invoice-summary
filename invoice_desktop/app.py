@@ -63,6 +63,8 @@ HELP = "\n".join(("执行步骤", *EXECUTION_STEPS, "", PROCESS_NOTICE, "", "必
 同步规则需要软件文件夹可写。你的本机 skill 路径绑定仅保存在本机；接收方无需绑定 skill 或导入规则包。仍可单独导出、导入离线更新包。处理时固定使用界面显示的识别版本。
 
 只修改 SKILL.md 文字不会自动改进算法：需要同时更新对应脚本和测试。共享字段、模板约定或依赖变化可能要求升级软件。人工校正和清空重填由软件维护。更新前请由 skill 维护者运行其测试。
+
+模板最低保留行采用与 skill 共用的 template_rules.json。同步后，按“第二联：财务报销”最后一个字实际所在行保留必要空白明细行，合计在其下方；预览报告显示实际行号。右侧模板需使用固定值，公式会报告坐标并停止。受支持的标识和排列声明可直接同步，未知策略或写表器变化需要升级软件。
 """ + "\n" + BOUNDARY_GUIDE
 
 
@@ -443,6 +445,12 @@ class App:
         parts = [f"目标工作簿：{preview.workbook}（原位更新，不自动创建备份）", f"识别版本：{preview.engine_version}", "填表方式：清空两表主表旧明细（含品牌、备注），按本次完整批次重填，保留右侧模板内容。"]
         for name, details in preview.sheet_details.items():
             parts.append(f"{name}：模板检查通过；将清空主表旧明细 {details['oldRowsToClear']} 行（含品牌、备注），重填 {details['rowsToFill']} 条；缩减明细区 {details['blankRowsToRemove']} 行；保留右侧模板内容 {details['fixedTextCellsToPreserve']} 个单元格。")
+            if details["minimumRetainedRow"] is not None:
+                parts.append(f"  共享模板规则：最低保留到第 {details['minimumRetainedRow']} 行，保留必要空白明细 {details['requiredBlankRows']} 行，合计放在第 {details['footerRow']} 行。")
+            elif "template_rules.json" not in read_manifest(preview.engine_dir)["files"]:
+                parts.append("  当前使用旧规则，尚无模板最低保留行；请同步更新后的本机 skill。")
+            else:
+                parts.append(f"  未检测到规则中的完整侧边标识，按实际明细收缩；合计放在第 {details['footerRow']} 行。")
         parts.extend(self._correction_lines(preview.original_payload, preview.corrections))
         parts.append("异常：\n" + "\n".join(preview.issues) if preview.issues else "异常：无；只读预览通过，尚未改动文件。")
         if preview.resume_pending:

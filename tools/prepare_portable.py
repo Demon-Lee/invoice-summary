@@ -9,7 +9,8 @@ from pathlib import Path
 
 project = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(project))
-from invoice_desktop.updates import EngineStore, FILES, read_manifest, check_application_contract
+from invoice_desktop.updates import EngineStore, read_manifest, check_application_contract
+from invoice_desktop.policy import snapshot_files
 
 
 def prepare(directory, preserve):
@@ -51,7 +52,7 @@ def prepare(directory, preserve):
             with tempfile.TemporaryDirectory(prefix="portable-", dir=engines) as temp:
                 stage = Path(temp) / "snapshot"
                 stage.mkdir()
-                for name in (*FILES, "manifest.json"):
+                for name in (*snapshot_files(manifest), "manifest.json"):
                     shutil.copyfile(source / name, stage / name)
                 read_manifest(stage)
                 os.replace(stage, destination)
