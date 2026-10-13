@@ -22,6 +22,22 @@ FILES = SHARED_FILES
 MAX_BYTES = 8 * 1024 * 1024
 
 
+class SkillSourceUnavailable(ValueError):
+    """The bound local source is missing; installed rules may still be usable."""
+
+
+class SharedInterfaceIncompatible(ValueError):
+    """A shared script cannot satisfy the installed software's interface."""
+
+
+class SourceChangedDuringSync(ValueError):
+    """The source is no longer the version reviewed before syncing."""
+
+
+PYTHON_INTERFACES = {"invoice_pipeline.py": {"main": 1, "is_verification_report_pdf": 1},
+                     "collect_excel_totals.py": {"main": 1, "collect_excel_totals": 1}}
+
+
 def sha256(path):
     digest = hashlib.sha256()
     with Path(path).open("rb") as stream:
@@ -37,7 +53,7 @@ def source_files(skill_dir):
     writer = root / "scripts/write_summary.mjs"
     for path in (*result.values(), writer):
         if not path.is_file():
-            raise ValueError(f"skill 文件不完整：{path}")
+            raise SkillSourceUnavailable(f"skill 文件不完整或路径不存在：{path}")
     return result, writer
 
 
@@ -82,28 +98,47 @@ def read_manifest(directory):
     return manifest
 
 
-def validate_python(directory):
-    required = {"invoice_pipeline.py": {"main": 1, "is_verification_report_pdf": 1},
-                "collect_excel_totals.py": {"main": 1, "collect_excel_totals": 1}}
-    modules = {}
-    for name in ("invoice_pipeline.py", "collect_excel_totals.py"):
-        source = (Path(directory) / name).read_text(encoding="utf-8-sig")
+def _interface_tree(source, name):
+    try:
         tree = ast.parse(source, filename=name)
-        functions = {node.name: node for node in tree.body if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))}
-        for function in required[name]:
-            node = functions.get(function)
-            if not isinstance(node, ast.FunctionDef):
-                raise ValueError(f"识别接口不兼容：{name} 缺少同步函数 {function}")
-            positional = node.args.posonlyargs + node.args.args
-            if ((not positional and node.args.vararg is None) or len(positional)-len(node.args.defaults) > 1
-                    or any(default is None for default in node.args.kw_defaults)):
-                raise ValueError(f"识别接口不兼容：{name} 的 {function} 无法接收单个参数")
+    except SyntaxError as exc:
+        raise SharedInterfaceIncompatible(f"识别脚本语法不兼容：{name}：{exc}") from exc
+    functions = {node.name: node for node in tree.body if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))}
+    for function in PYTHON_INTERFACES[name]:
+        node = functions.get(function)
+        if not isinstance(node, ast.FunctionDef):
+            raise SharedInterfaceIncompatible(f"识别接口不兼容：{name} 缺少同步函数 {function}")
+        positional = node.args.posonlyargs + node.args.args
+        if ((not positional and node.args.vararg is None) or len(positional)-len(node.args.defaults) > 1
+                or any(default is None for default in node.args.kw_defaults)):
+            raise SharedInterfaceIncompatible(f"识别接口不兼容：{name} 的 {function} 无法接收单个参数")
+    return tree
+
+
+def validate_python(directory):
+    try:
+        _validate_python(directory)
+    except SharedInterfaceIncompatible:
+        raise
+    except OSError:
+        raise
+    except (Exception, SystemExit) as exc:
+        raise SharedInterfaceIncompatible(str(exc)) from exc
+
+
+def _validate_python(directory):
+    required = PYTHON_INTERFACES
+    modules = {}
+    for name in required:
+        tree = _interface_tree((Path(directory) / name).read_text(encoding="utf-8-sig"), name)
         for node in ast.walk(tree):
             imported = [a.name for a in node.names] if isinstance(node, ast.Import) else (
                 [node.module] if isinstance(node, ast.ImportFrom) and node.module and not node.level else [])
             for module in imported:
                 try:
                     importlib.import_module(module)
+                except OSError:
+                    raise
                 except Exception as exc:
                     raise ValueError(f"更新依赖 {module} 无法加载，请升级主程序：{exc}") from exc
         try:
@@ -115,6 +150,8 @@ def validate_python(directory):
                     raise TypeError("不支持异步入口")
                 inspect.signature(callable_value).bind(*([None] * count))
             modules[name] = loaded
+        except OSError:
+            raise
         except (Exception, SystemExit) as exc:
             raise ValueError(f"识别接口无法加载：{name}：{exc}") from exc
     _validate_output_contract(modules)
@@ -164,6 +201,8 @@ def _validate_output_contract(modules):
             if (not isinstance(verified.get("verification"), list) or not isinstance(verified.get("exceptions"), list)
                     or verified.get("batch_verification", {}).get("status") != "passed"):
                 raise ValueError("验证字段不完整")
+        except OSError:
+            raise
         except (Exception, SystemExit) as exc:
             raise ValueError(f"识别接口输出不兼容：{exc}") from exc
 
@@ -193,12 +232,14 @@ def check_compatible(candidate, baseline):
     return changed_files(candidate, baseline)
 
 
-def export_update(skill_dir, output, baseline=None):
+def export_update(skill_dir, output, baseline=None, *, expected_version=None):
     output = Path(output).resolve()
     paths, writer = source_files(skill_dir)
     if output in [p.resolve() for p in (*paths.values(), writer)] or output.suffix.lower() != ".zip":
         raise ValueError("更新包必须是独立的 .zip 文件，不能覆盖 skill 源文件")
     manifest = manifest_for_skill(skill_dir)
+    if expected_version is not None and manifest["version"] != expected_version:
+        raise SourceChangedDuringSync("本机规则在本次确认后又发生变化，尚未激活更新。请检查来源后重新点击同步，以保护当前预览和校正。")
     check_application_contract(manifest, baseline)
     if baseline is not None:
         check_compatible(manifest, baseline)
@@ -206,12 +247,20 @@ def export_update(skill_dir, output, baseline=None):
         root = Path(temp)
         for name, source in paths.items():
             shutil.copyfile(source, root / name)
-        validate_python(root)
-    output.parent.mkdir(parents=True, exist_ok=True)
-    with zipfile.ZipFile(output, "w", compression=zipfile.ZIP_DEFLATED) as archive:
-        for name, source in paths.items():
-            archive.write(source, name)
-        archive.writestr("manifest.json", json.dumps(manifest, ensure_ascii=False, indent=2))
+        (root / "manifest.json").write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
+        try:
+            read_manifest(root)
+        except ValueError as exc:
+            raise SourceChangedDuringSync("本机规则在复制期间发生变化，尚未导出或激活。请等待来源保存完成后重新同步。") from exc
+        try:
+            validate_python(root)
+        except SharedInterfaceIncompatible as exc:
+            exc.version = manifest["version"]
+            raise
+        output.parent.mkdir(parents=True, exist_ok=True)
+        with zipfile.ZipFile(output, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+            for name in (*paths, "manifest.json"):
+                archive.write(root / name, name)
     return manifest
 
 
@@ -220,6 +269,8 @@ class EngineStore:
         self.root = Path(root).resolve()
         self.bundled = Path(bundled).resolve()
         self.root.mkdir(parents=True, exist_ok=True)
+        self._interface_failures = {}
+        self._signature_checked_version = None
         read_manifest(self.bundled)
 
     def _state(self):
@@ -242,18 +293,53 @@ class EngineStore:
         return read_manifest(self.active())["version"]
 
     def source_status(self, source):
-        candidate = manifest_for_skill(source)
-        baseline = read_manifest(self.active())
+        try:
+            baseline = read_manifest(self.active())
+        except (OSError, ValueError) as exc:
+            return {"kind": "installed_invalid", "changed": [], "error": str(exc), "version": None}
+        try:
+            candidate = manifest_for_skill(source)
+        except (SkillSourceUnavailable, OSError) as exc:
+            return {"kind": "unavailable", "changed": [], "error": str(exc), "version": None}
+        except ValueError as exc:
+            return {"kind": "invalid_source", "changed": [], "error": str(exc), "version": None}
+        changed = changed_files(candidate, baseline)
         try:
             check_application_contract(candidate, read_manifest(self.bundled))
-            changed = check_compatible(candidate, baseline)
-            error = None
         except ValueError as exc:
-            changed = changed_files(candidate, baseline)
-            if candidate["source_writer_sha256"] != baseline["source_writer_sha256"] and "write_summary.mjs" not in changed:
-                changed.append("write_summary.mjs")
-            error = str(exc)
-        return {"changed": changed, "error": error, "version": candidate["version"]}
+            return {"kind": "incompatible", "changed": changed, "error": str(exc), "version": candidate["version"]}
+        try:
+            changed = check_compatible(candidate, baseline)
+        except ValueError as exc:
+            return {"kind": "needs_adaptation", "changed": changed, "error": str(exc), "version": candidate["version"]}
+        if candidate["version"] in self._interface_failures:
+            return {"kind": "incompatible", "changed": changed, "error": self._interface_failures[candidate["version"]], "version": candidate["version"]}
+        if changed and self._signature_checked_version != candidate["version"]:
+            try:
+                paths, _ = source_files(source)
+                for name in PYTHON_INTERFACES:
+                    code = paths[name].read_bytes()
+                    if hashlib.sha256(code).hexdigest() != candidate["files"][name]:
+                        return {"kind": "source_changed", "changed": changed, "error": "本机规则在检查期间发生变化。", "version": candidate["version"]}
+                    _interface_tree(code.decode("utf-8-sig"), name)
+            except SharedInterfaceIncompatible as exc:
+                self.remember_interface_failure(candidate["version"], exc)
+                return {"kind": "incompatible", "changed": changed, "error": str(exc), "version": candidate["version"]}
+            except (OSError, SkillSourceUnavailable) as exc:
+                return {"kind": "unavailable", "changed": changed, "error": str(exc), "version": candidate["version"]}
+            except UnicodeError as exc:
+                return {"kind": "invalid_source", "changed": changed, "error": str(exc), "version": candidate["version"]}
+            self._signature_checked_version = candidate["version"]
+        return {"kind": "update_available" if changed else "current", "changed": changed, "error": None, "version": candidate["version"]}
+
+    def remember_interface_failure(self, version, error):
+        if version:
+            self._interface_failures[version] = str(error)
+            if len(self._interface_failures) > 32:
+                self._interface_failures.pop(next(iter(self._interface_failures)))
+
+    def clear_interface_failure(self, version):
+        self._interface_failures.pop(version, None)
 
     def _activate(self, state):
         path = self.root / "active.json"
@@ -261,7 +347,7 @@ class EngineStore:
         staged.write_text(json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8")
         os.replace(staged, path)
 
-    def install(self, archive_path):
+    def install(self, archive_path, *, expected_version=None):
         with tempfile.TemporaryDirectory(prefix="update-", dir=self.root) as temp:
             extracted = Path(temp) / "engine"
             extracted.mkdir()
@@ -277,12 +363,19 @@ class EngineStore:
                         raise ValueError("更新包包含不允许的文件类型")
                     (extracted / item.filename).write_bytes(archive.read(item))
             manifest = read_manifest(extracted)
+            if expected_version is not None and manifest["version"] != expected_version:
+                raise SourceChangedDuringSync("更新包的规则版本已变化，尚未激活。请重新检查并确认本次更新。")
             if set(names) != set(snapshot_files(manifest)) | {"manifest.json"}:
                 raise ValueError("更新包文件与其声明的规则格式不一致")
             before = read_manifest(self.active())
             check_application_contract(manifest, read_manifest(self.bundled))
             changed = check_compatible(manifest, before)
-            validate_python(extracted)
+            try:
+                validate_python(extracted)
+            except SharedInterfaceIncompatible as exc:
+                self.remember_interface_failure(manifest["version"], exc)
+                raise
+            self.clear_interface_failure(manifest["version"])
             destination = self.root / "engines" / manifest["version"]
             destination.parent.mkdir(exist_ok=True)
             if not destination.exists():
@@ -294,11 +387,15 @@ class EngineStore:
                 self._activate({"active": manifest["version"], "previous": state["active"]})
             return {"version": manifest["version"], "previous_version": before["version"], "changed": changed}
 
-    def sync(self, source):
+    def sync(self, source, *, expected_version=None):
         with tempfile.TemporaryDirectory(prefix="sync-", dir=self.root) as temp:
             path = Path(temp) / "update.zip"
-            export_update(source, path, read_manifest(self.active()))
-            return self.install(path)
+            try:
+                export_update(source, path, read_manifest(self.active()), expected_version=expected_version)
+            except SharedInterfaceIncompatible as exc:
+                self.remember_interface_failure(getattr(exc, "version", None), exc)
+                raise
+            return self.install(path, expected_version=expected_version)
 
     def rollback(self):
         state = self._state()
