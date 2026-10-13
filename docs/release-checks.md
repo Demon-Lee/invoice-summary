@@ -142,4 +142,5 @@
 - 最终三个变更 Python 文件静态语法编译与 diff 空白检查通过。修复后 Windows 目录版重新构建退出 0；只读提取编译归档确认 1.1.1、ui.py、动态版本引用、摘要／按钮样式方法和提示宽度修正已进入构建，不执行归档代码。
 - 构建／发布当前规则保持 `6b9e6cdafb3f`，上一规则 `42334e9f238e`；两快照实际文件哈希与清单匹配，源 skill 共享文件与当前快照相同。engine、controller、updates、workbook、corrections、template_rules 无代码差异，源 writer SHA256 仍为 `a2392109e01f7d3ae7ae2e57769dd7b7dbedb291539d0b339a21f8b438853a85`。
 - 发布前两次确认原程序未运行，检查绝对路径、重解析点、原规则选择和暂存 EXE 哈希。1.1.1 已放回 `D:\Workspace\发票专题\invoice-desktop\release\InvoiceSummary`；旧文件夹保存为 `release/InvoiceSummary-1.0.0-archive`。发布与构建 EXE SHA256 同为 `cd0235c5ab1c906bae38f3685ecd18ca5b03c29b145a35ad3e6aa5d891dd6568`；使用说明及功能边界说明均为 1.1.1。
+- 实现提交为 `2f134e8`。从实际发布目录生成 `发票汇总助手-1.1.1-Windows.zip`（40,677,215 字节、1308 项）与源码 ZIP（98 项）。ZIP 内 EXE 与发布目录相同，两版规则逐文件哈希与清单匹配，说明版本正确；源码逐项与 Git 跟踪的当前文件一致。校验值写入 `release/SHA256.json`，完成记录提交后重新打包，使源码包含最终记录。
 - 本地浏览器设计预览及 docs/design/business-ui-preview.jpg 已更新 V1.1.1 标记；它们使用明确标注的示例数据，不是原生软件运行截图。本次未新增或运行测试，未启动原生 GUI、诊断、同步／导入接口检查或 PDF／Excel 流程，未写入业务文件。原生最小窗口、Windows 缩放、长文本校正及真实业务流程未经运行验证；构建、浏览器效果图和静态审查不代表原生运行通过。
