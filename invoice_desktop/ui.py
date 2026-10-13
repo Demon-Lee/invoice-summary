@@ -1,9 +1,9 @@
 """Business-style native presentation, separate from invoice operations."""
 import tkinter as tk
 from tkinter import ttk
-from tkinter.scrolledtext import ScrolledText
 
 from . import __version__
+from .ui_widgets import AutoHideScrollbar, AutoScrollText, ThinProgressbar
 
 FONT = "Microsoft YaHei UI"
 PALETTE = {
@@ -56,9 +56,6 @@ def configure_theme(root):
     style.configure("Treeview.Heading", font=(FONT, 9, "bold"), padding=(8, 6), background="#f2f5f9", foreground="#53647c", borderwidth=0, relief="flat")
     style.map("Treeview", background=[("selected", PALETTE["selected"])], foreground=[("selected", "#17315c")])
     style.map("Treeview.Heading", background=[("active", "#e8edf5")])
-    style.configure("Vertical.TScrollbar", background="#c1ccda", troughcolor="#f4f6fa", borderwidth=0, arrowsize=12)
-    style.configure("Horizontal.TScrollbar", background="#c1ccda", troughcolor="#f4f6fa", borderwidth=0, arrowsize=12)
-    style.configure("Horizontal.TProgressbar", background=PALETTE["blue"], troughcolor="#e8edf5", borderwidth=0, thickness=3)
 
 
 def configure_navigation(root, style):
@@ -108,7 +105,7 @@ def surface(parent, *, background=None, padding=0):
 
 
 def text_widget(parent, height=15):
-    return ScrolledText(parent, height=height, wrap="word", bg=PALETTE["surface"], fg=PALETTE["text"],
+    return AutoScrollText(parent, height=height, wrap="word", bg=PALETTE["surface"], fg=PALETTE["text"],
                         relief="flat", bd=0, padx=12, pady=8, font=(FONT, 9), state="disabled",
                         selectbackground=PALETTE["selected"], selectforeground=PALETTE["heading"])
 
@@ -260,7 +257,9 @@ def build_interface(app, *, execution_steps, necessary_conditions, process_notic
     table = surface(process)
     table.grid(row=7, column=0, sticky="nsew")
     table.rowconfigure(0, weight=1)
+    table.rowconfigure(1, minsize=14)
     table.columnconfigure(0, weight=1)
+    table.columnconfigure(1, minsize=14)
     columns = ("sequence", "filename", "product_name", "spec", "unit", "quantity", "price", "amount", "manufacturer", "correction")
     app.tree = ttk.Treeview(table, columns=columns, show="headings", height=4)
     for name, label, width in zip(columns, ("序号", "PDF → 新文件名", "产品名称", "规格型号", "单位", "数量", "单价（自动）", "含税金额", "生产厂家", "人工校正"), (48, 250, 170, 110, 48, 65, 95, 100, 175, 84)):
@@ -271,10 +270,10 @@ def build_interface(app, *, execution_steps, necessary_conditions, process_notic
     app.tree.tag_configure("corrected", background="#fff8e5")
     app.tree.bind("<Double-1>", app._edit_detail)
     app.tree.grid(row=0, column=0, sticky="nsew")
-    vertical = ttk.Scrollbar(table, orient="vertical", command=app.tree.yview)
-    vertical.grid(row=0, column=1, sticky="ns")
-    horizontal = ttk.Scrollbar(table, orient="horizontal", command=app.tree.xview)
-    horizontal.grid(row=1, column=0, sticky="ew")
+    vertical = AutoHideScrollbar(table, orient="vertical", command=app.tree.yview, end_gap=14)
+    horizontal = AutoHideScrollbar(table, orient="horizontal", command=app.tree.xview, end_gap=14)
+    vertical.attach(app.tree, table)
+    horizontal.attach(app.tree, table)
     app.tree.configure(yscrollcommand=vertical.set, xscrollcommand=horizontal.set)
     report_heading = ttk.Frame(process)
     report_heading.grid(row=8, column=0, sticky="ew", pady=(7, 3))
@@ -290,7 +289,7 @@ def build_interface(app, *, execution_steps, necessary_conditions, process_notic
     footer.pack(fill="x", pady=(6, 0))
     ttk.Label(footer, textvariable=app.status, font=(FONT, 9), foreground=PALETTE["muted"], wraplength=850).pack(side="left")
     ttk.Label(footer, text="共享规则版本见“规则与更新”", font=(FONT, 9), foreground=PALETTE["muted"]).pack(side="right")
-    app.progress_bar = ttk.Progressbar(outer, mode="indeterminate", length=100)
+    app.progress_bar = ThinProgressbar(outer, background=PALETTE["background"], accent=PALETTE["blue"])
     app.progress_bar.pack(fill="x", pady=(4, 0))
     build_rules(app, rules, boundary_guide, retained_features)
     help_panel = surface(help_tab)
