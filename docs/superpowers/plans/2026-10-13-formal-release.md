@@ -36,4 +36,8 @@ Files: docs/release-checks.md、规格／计划与发布资产。
 - [x] 静态编译变更 Python，检查 diff，独立源码审查并处理问题。
 - [x] 构建，读取编译归档确认正式版及新 UI 模块；核对共享规则快照未改变。
 - [x] 检查软件运行状态和发布路径，安全替换原发布目录并归档旧版。
-- [ ] 提交变更、生成正式版 ZIP，核对 ZIP 内容／哈希并记录证据。
+- [x] 提交变更、生成正式版 ZIP，核对 ZIP 内容／哈希并记录证据。
+
+## 完成记录
+
+实现提交 3bfca4d，静态复审无剩余 Critical / Important，已报告 Minor 已处理。最终 Windows 构建退出 0，原发布目录已更新为 1.0.0，旧版归档为 InvoiceSummary-0.1.8-archive。当前／上一规则分别保持 6b9e6cdafb3f、42334e9f238e。Windows ZIP 含 1308 项，源码 ZIP 含 93 项；EXE、快照、说明和源码与发布目录／工作区逐项一致，校验值记录于 release/SHA256.json。完成记录提交后重新包装源码，以包含最终文档。
