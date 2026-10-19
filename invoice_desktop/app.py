@@ -15,7 +15,7 @@ from .controller import Controller, resource_root, application_root
 from .updates import EngineStore, export_update, read_manifest, SharedInterfaceIncompatible
 from .corrections import FIELDS, LABELS, field_value, normalize
 from .policy import BOUNDARY_GUIDE, RETAINED_FEATURES, describe_changes
-from .ui import FONT, PALETTE, build_interface, set_stage_style, surface, text_widget
+from .ui import FONT, PALETTE, build_interface, set_stage_style, surface, text_widget, skipped_pdf_notice
 
 EXECUTION_STEPS = (
     "1. 选择完整批次的 PDF 文件夹和目标 .xlsx 工作簿。",
@@ -49,6 +49,8 @@ HELP = "\n".join(("执行步骤", *EXECUTION_STEPS, "", PROCESS_NOTICE, "", "必
 预览完成只表示检查结束；只有“预览通过”才可以执行。人工校正后的检查只更新页面提示。更换输入或更新规则后，须重新预览。
 
 检查报告把异常和失败原因放在前面，可通过右侧滚动条查看全文。“复制报告”复制完整报告，便于保存或向维护者反馈问题。
+
+使用新版共享规则时，按内容明确识别出的验收单、领用单等非发票 PDF 会自动跳过，不参与发票编号、改名、填表或金额统计。完成弹窗列出跳过文件，超过八项时完整清单见检查报告。扫描件、损坏文件、类型不明或疑似发票缺字段仍提示异常；目录中没有可处理发票时禁止执行。
 
 人工校正
 选中一条预览明细，点击“人工校正”或双击该行。对照原 PDF 校正产品名称、规格型号、单位、数量、含税金额和生产厂家，单价自动计算。保存后重新检查金额、文件名和工作簿映射；通过后才可执行。“恢复识别值”可撤销该行校正。
@@ -493,7 +495,14 @@ class App:
         rows = sum(len(r.get("rows", [])) for r in preview.payload.get("records", []))
         self._update_metrics(preview.payload, preview.total, preview.corrections)
         self.summary.set(f"{invoices} 张发票 · 整批重填 {rows} 条明细 · 本批合计 ¥{preview.total} · 人工校正 {len(preview.corrections)} 条")
+        skipped = preview.payload.get("skipped_files", [])
+        if skipped:
+            self.summary.set(self.summary.get() + f" · 已跳过 {len(skipped)} 份非发票 PDF")
+        notice = skipped_pdf_notice(preview.payload)
+        popup_notice = skipped_pdf_notice(preview.payload, limit=8)
         parts = ["异常：\n" + "\n".join(preview.issues), "下一步：可校正的字段请双击明细修改；结构或模板问题解决后再重新预览。"] if preview.issues else ["异常：无；只读预览通过，尚未改动文件。"]
+        if notice:
+            parts.append(notice)
         parts.extend([f"目标工作簿：{preview.workbook}（原位更新，不自动创建备份）", f"识别版本：{preview.engine_version}", "填表方式：清空两表主表旧明细（含品牌、备注），按本次完整批次重填，保留右侧模板内容。"])
         for name, details in preview.sheet_details.items():
             parts.append(f"{name}：模板检查通过；将清空主表旧明细 {details['oldRowsToClear']} 行（含品牌、备注），重填 {details['rowsToFill']} 条；缩减明细区 {details['blankRowsToRemove']} 行；保留右侧模板内容 {details['fixedTextCellsToPreserve']} 个单元格。")
@@ -515,12 +524,12 @@ class App:
             self.execute.configure(state="normal")
         phase = phase or ("只读预览" if notify else "校正检查")
         if not preview.clean:
-            self._complete_stage("warning", f"{phase}完成，发现 {len(preview.issues)} 项异常", "暂不能执行。请查看下方异常，校正字段或解决问题后重新检查。", notify=notify, reason=preview.issues[0])
+            self._complete_stage("warning", f"{phase}完成，发现 {len(preview.issues)} 项异常", "暂不能执行。请查看下方异常，校正字段或解决问题后重新检查。", notify=notify, reason="\n\n".join(filter(None, (preview.issues[0], popup_notice))))
         elif preview.has_changes:
             next_step = "检测到上次处理未完成，点击“执行处理”继续。" if preview.resume_pending else "文件尚未改动；核对明细后点击“执行处理”。"
-            self._complete_stage("success", f"{phase}完成，预览通过", next_step, notify=notify, reason=self.summary.get())
+            self._complete_stage("success", f"{phase}完成，预览通过", next_step, notify=notify, reason="\n\n".join(filter(None, (self.summary.get(), popup_notice))))
         else:
-            self._complete_stage("success", f"{phase}完成，无需处理", "没有可重填明细；可选择其他批次重新预览。", notify=notify)
+            self._complete_stage("success", f"{phase}完成，无需处理", "没有可重填明细；可选择其他批次重新预览。", notify=notify, reason=popup_notice)
 
     def _render_table(self, payload, renamed=None, corrections=None):
         self.tree.delete(*self.tree.get_children())
@@ -658,6 +667,10 @@ class App:
         self._update_metrics(result["payload"], result.get("total"), result.get("corrections"))
         outcome = "处理完成，逐分金额验证通过。" if result["status"] == "completed" else "无需处理，未改动文件。" if result["status"] == "no_change" else "处理未完成。"
         parts = [outcome]
+        notice = skipped_pdf_notice(result["payload"])
+        popup_notice = skipped_pdf_notice(result["payload"], limit=8)
+        if notice:
+            parts.append(notice)
         if result.get("error"):
             parts.append("原因：" + result["error"])
         if result.get("verification", {}).get("exceptions"):
@@ -681,14 +694,14 @@ class App:
         if result["status"] == "completed":
             if result["cleanup"] == "完成":
                 detail = f"金额核对通过（本批合计 ¥{result['total']}），临时文件已清理。可点击“打开工作簿”查看结果。"
-                self._complete_stage("success", "执行处理完成", detail, notify=True)
+                self._complete_stage("success", "执行处理完成", detail, notify=True, reason=popup_notice)
             else:
-                self._complete_stage("warning", "处理完成，临时文件清理未完成", "填表和金额核对已完成；请查看下方清理原因。继续处理前请重新预览。", notify=True, reason=result["cleanup"])
+                self._complete_stage("warning", "处理完成，临时文件清理未完成", "填表和金额核对已完成；请查看下方清理原因。继续处理前请重新预览。", notify=True, reason="\n\n".join(filter(None, (result["cleanup"], popup_notice))))
         elif result["status"] == "no_change":
-            self._complete_stage("success", "执行阶段结束，无需处理", "未改动文件；继续处理前请重新进行只读预览。", notify=True)
+            self._complete_stage("success", "执行阶段结束，无需处理", "未改动文件；继续处理前请重新进行只读预览。", notify=True, reason=popup_notice)
         else:
             reason = result.get("error") or "请查看下方“检查、异常与实际结果”中的具体原因。"
-            self._complete_stage("error", "执行处理未完成", "部分步骤可能已完成；解决原因后重新预览，可继续未完成的处理。", notify=True, reason=reason)
+            self._complete_stage("error", "执行处理未完成", "部分步骤可能已完成；解决原因后重新预览，可继续未完成的处理。", notify=True, reason="\n\n".join(filter(None, (reason, popup_notice))))
 
     def _sync(self):
         source = self.source.get().strip()

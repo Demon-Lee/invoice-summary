@@ -1,0 +1,11 @@
+{
+  "schema_version": 1,
+  "minimum_detail_area": {
+    "strategy": "sidebar-label-end",
+    "label_value_source": "literal-cells",
+    "labels": ["第二联：财务报销"],
+    "ignore_characters": "：:",
+    "allow_single_cell": true,
+    "allow_vertical_cells": true
+  }
+}

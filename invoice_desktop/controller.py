@@ -184,7 +184,12 @@ class Controller:
 
     def _fingerprints(self, directory, workbook):
         parser = load_engine(self.engine_dir, "invoice_pipeline.py")
-        files = [workbook, *(p for p in sorted(directory.glob("*.pdf")) if not parser.is_verification_report_pdf(p))]
+        classifier = getattr(parser, "classify_pdf_document", None)
+        # New rules report skipped files too: pin the directory so that list
+        # cannot become stale between preview and execution. Hashing is not
+        # invoice numbering, renaming, writing or amount calculation.
+        files = [workbook, *(p for p in sorted(directory.glob("*.pdf"))
+                             if callable(classifier) or not parser.is_verification_report_pdf(p))]
         return {str(path): sha256(path) for path in files}
 
     def _actual_rename_plan(self, preview):

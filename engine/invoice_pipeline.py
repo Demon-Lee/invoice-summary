@@ -23,6 +23,17 @@ VERIFICATION_PLATFORM_MARKERS = (
     "https://inv-veri.chinatax.gov.cn/index.html",
 )
 VERIFICATION_RESULT_MARKERS = ("查验次数", "查验时间")
+NON_INVOICE_TITLES = (
+    "材料验收单", "材料领用单", "验收单", "验收表", "领用单", "领用表",
+    "采购申请单", "采购申请表", "付款申请单", "付款申请表", "费用报销单", "报销单", "报销表",
+    "送货单", "收货单", "出库单", "入库单", "对账单", "报价单", "报价表",
+    "采购合同", "购销合同", "销售合同", "产品说明书", "使用说明书", "检测报告", "检验报告", "合格证",
+)
+INVOICE_CONTENT_MARKERS = (
+    "发票号码", "发票代码", "价税合计", "电子发票", "电子普通发票", "电子专用发票",
+    "增值税普通发票", "增值税专用发票", "通用机打发票", "定额发票",
+    "机动车销售统一发票", "二手车销售统一发票",
+)
 
 
 def _invoice_number_candidates(text: str) -> list[str]:
@@ -40,6 +51,21 @@ def _is_verification_report_text(text: str) -> bool:
         any(marker in source for marker in VERIFICATION_PLATFORM_MARKERS)
         and any(marker in source for marker in VERIFICATION_RESULT_MARKERS)
     )
+
+
+def _has_original_invoice_title(text: str) -> bool:
+    lines = [re.sub(r"\s+", "", line) for line in text.splitlines() if line.strip()]
+    title = re.compile(r"^(?P<prefix>[\u4e00-\u9fff]{0,12})(?:电子(?:普通|专用)?发票|增值税(?:电子)?(?:普通|专用)?发票|(?:普通|专用)发票|机动车销售统一发票|二手车销售统一发票|通用机打发票|定额发票)")
+    for index, line in enumerate(lines):
+        matched = title.match(line)
+        if not matched or any(marker in matched["prefix"] for marker in ("类型", "票种", "查验", "平台", "结果", "报告")):
+            continue
+        if line[matched.end():].startswith(("查验", "查询")):
+            continue
+        if index and re.fullmatch(r"(?:发票类型|发票种类|票种)[：:]?", lines[index - 1]):
+            continue
+        return True
+    return False
 
 
 def clean_project_name(value: str) -> str:
@@ -406,12 +432,16 @@ def _join_wrapped_name_words(words: list[dict]) -> str:
     result = ""
     for row in _visual_rows(words, tolerance=4):
         row_result = ""
+        previous = None
         for word in sorted(row, key=lambda item: item["x0"]):
             part = _join_wrapped_name_parts([str(word["text"])])
-            if row_result and re.fullmatch(r"[\u3400-\u9fff]", part):
-                row_result += f" {part}"
-            else:
-                row_result = _join_wrapped_name_parts([row_result, part])
+            gap = float(word["x0"]) - float(previous.get("x1", previous["x0"])) if previous else 0
+            # Preserve visible spaces within a visual line, including Chinese
+            # followed by a size. A split *category* is still one prefix.
+            if row_result and gap > 2 and row_result.count("*") % 2 == 0:
+                row_result += " "
+            row_result += part
+            previous = word
         result += row_result
     return result
 
@@ -454,15 +484,20 @@ def _wrapped_detail_continuations(page_words: list[list[dict]]) -> list[dict]:
                 if word["top"] > start["bottom"] and word["top"] < end_top
             ]
             start_midpoint = (start["top"] + start["bottom"]) / 2
-            inline_name_parts = [
-                str(word["text"])
+            inline_name_words = [
+                word
                 for word in sorted(words, key=lambda word: word["x0"])
                 if word is not start
                 and word["x0"] >= start["x1"] - 1
                 and word["x0"] < 119
+                and word.get("x1", word["x0"]) <= 119
                 and abs(((word["top"] + word["bottom"]) / 2) - start_midpoint) <= 4
             ]
-            name_words = [word for word in wrapped if word["x0"] < 119]
+            name_words = [
+                word for word in wrapped
+                if word["x0"] < 119
+                and (word["x0"] + word.get("x1", word["x0"])) / 2 < 119
+            ]
             spec_words = [word for word in wrapped if 119 <= word["x0"] < 192]
             unit_words = [
                 word for word in wrapped
@@ -470,17 +505,14 @@ def _wrapped_detail_continuations(page_words: list[list[dict]]) -> list[dict]:
             ]
             continuations.append({
                 "name": _join_wrapped_name_words(name_words),
-                "inline_name": _join_wrapped_name_words([
+                "inline_name": _join_wrapped_name_words(inline_name_words),
+                "full_name": _join_wrapped_name_words([start, *inline_name_words, *name_words]),
+                "inline_spec": _join_wrapped_name_words([
                     word for word in words
                     if word is not start
-                    and word["x0"] >= start["x1"] - 1
-                    and word["x0"] < 119
+                    and start["x1"] - 1 <= word["x0"] < DETAIL_COLUMN_BOUNDS["spec"][1]
+                    and word not in inline_name_words
                     and abs(((word["top"] + word["bottom"]) / 2) - start_midpoint) <= 4
-                ]),
-                "full_name": _join_wrapped_name_parts([
-                    str(start["text"]),
-                    *inline_name_parts,
-                    _join_wrapped_name_words(name_words),
                 ]),
                 "spec": "".join(str(word["text"]) for word in spec_words),
                 "unit": _join_wrapped_column_words(unit_words),
@@ -489,10 +521,15 @@ def _wrapped_detail_continuations(page_words: list[list[dict]]) -> list[dict]:
 
 
 def _apply_detail_continuation(detail, continuation, text_spec_continuation):
-    if "*" in continuation["inline_name"]:
+    if continuation["inline_name"] and "\u4ef7\u7a0e\u5408\u8ba1" not in continuation["full_name"]:
         detail["name"] = continuation["full_name"]
         inline_name = continuation["inline_name"]
-        if inline_name and detail["spec"].startswith(inline_name):
+        if "inline_spec" in continuation:
+            # Whitespace tokenization can place an ordinary name fragment in
+            # spec. Coordinates, rather than that token split, own the fields.
+            detail["spec"] = continuation["inline_spec"]
+            text_spec_continuation = ""
+        elif detail["spec"].startswith(inline_name):
             detail["spec"] = detail["spec"][len(inline_name) :].lstrip()
     elif "\u4ef7\u7a0e\u5408\u8ba1" not in continuation["full_name"]:
         detail["name"] += continuation["name"]
@@ -865,16 +902,57 @@ def extract_pdf_record(pdf_path, sequence):
     )
 
 
-def is_verification_report_pdf(pdf_path):
-    """Return whether a PDF is a verification report that must be skipped."""
+def classify_pdf_document(pdf_path):
+    """Skip only positively identified non-invoices, never failed invoice parses."""
     pdf_path = Path(pdf_path)
     try:
         with pdfplumber.open(pdf_path) as pdf:
-            text = "\n".join(page.extract_text() or "" for page in pdf.pages)
-    except Exception:
-        # Let the invoice parser produce the canonical unreadable-PDF exception.
-        return False
-    return _is_verification_report_text(text)
+            texts = [page.extract_text() or "" for page in pdf.pages]
+    except Exception as error:
+        return {"kind": "unknown", "reason": f"无法读取 PDF：{error}；未跳过，请检查文件。"}
+    kinds, titles, conflicts = [], [], []
+    for page_number, text in enumerate(texts, 1):
+        compact = re.sub(r"\s+", "", text)
+        heading = [re.sub(r"\s+", "", line) for line in text.splitlines() if line.strip()][:6]
+        title = next((title for title in NON_INVOICE_TITLES
+                      if any(len(line) <= 80 and not re.search(r"[：:*¥￥]", line)
+                             and re.search(re.escape(title) + r"(?:[（(][^（）()]{0,30}[）)])?$", line)
+                             for line in heading)), None)
+        if _is_verification_report_text(compact):
+            if _has_original_invoice_title(text):
+                kinds.append("unknown")
+                conflicts.append(str(page_number))
+            else:
+                kinds.append("verification_report")
+        elif (_has_original_invoice_title(text)
+              or any(marker in compact for marker in INVOICE_CONTENT_MARKERS)
+              or ("购买方" in compact and "销售方" in compact)
+              or ("税率" in compact and "税额" in compact and "合计" in compact)
+              or any("发票" in line for line in heading)):
+            kinds.append("invoice")
+        elif title:
+            kinds.append("non_invoice")
+            if title not in titles:
+                titles.append(title)
+        else:
+            kinds.append("unknown")
+    if not kinds or "unknown" in kinds:
+        pages = "、".join(str(index) for index, kind in enumerate(kinds, 1) if kind == "unknown")
+        location = f"第 {pages} 页无文本或类型不明" if pages else "没有可读取的页面"
+        if conflicts:
+            location += "；第 " + "、".join(conflicts) + " 页同时出现原票标题与查验报告标记，不能自动排除"
+        return {"kind": "unknown", "reason": f"无法确认 PDF 类型（{location}）；未跳过，请检查是否为扫描件或不支持的发票。"}
+    # An invoice mixed with known forms/reports still needs complete validation.
+    if "invoice" in kinds:
+        return {"kind": "invoice", "reason": "检测到发票特征，继续完整识别与校验。"}
+    if all(kind == "verification_report" for kind in kinds):
+        return {"kind": "verification_report", "reason": "发票查验报告，不属于待处理发票。"}
+    return {"kind": "non_invoice", "reason": "明确的非发票文档：" + "、".join(titles)}
+
+
+def is_verification_report_pdf(pdf_path):
+    """Keep the legacy interface while sharing the conservative classification."""
+    return classify_pdf_document(pdf_path)["kind"] == "verification_report"
 
 
 def _rename_status(source: Path, destination: Path) -> str:
@@ -1021,12 +1099,14 @@ def main(argv=None):
         "rename_plan": [],
         "exceptions": [],
         "verification": [],
+        "skipped_files": [],
     }
     if arguments.command == "verify":
         if not arguments.records or not arguments.excel_totals:
             parser.error("verify requires --records and --excel-totals")
         source = _load_records(arguments.records)
         payload["records"] = source.get("records", [])
+        payload["skipped_files"] = source.get("skipped_files", [])
         excel_totals = _load_excel_totals(arguments.excel_totals)
         payload["verification"], exceptions = _verify_records(
             payload["records"], excel_totals["sequences"]
@@ -1045,14 +1125,23 @@ def main(argv=None):
     if arguments.command == "rename" and arguments.records:
         source = _load_records(arguments.records)
         payload["records"] = source.get("records", [])
+        payload["skipped_files"] = source.get("skipped_files", [])
         _extend_unique_exceptions(payload["exceptions"], source.get("exceptions", []))
     else:
         pdf_paths = _selected_pdfs(arguments)
-        invoice_paths = [
-            pdf_path for pdf_path in pdf_paths if not is_verification_report_pdf(pdf_path)
-        ]
+        invoice_paths = []
+        for pdf_path in pdf_paths:
+            classification = classify_pdf_document(pdf_path)
+            if classification["kind"] in ("non_invoice", "verification_report"):
+                payload["skipped_files"].append({"pdf": str(pdf_path), **classification})
+            elif classification["kind"] == "unknown":
+                payload["exceptions"].append(_exception(pdf_path, "document_type", classification["reason"]))
+            else:
+                invoice_paths.append(pdf_path)
         if not pdf_paths:
             payload["exceptions"].append({"pdf": "", "field": "pdf", "message": "no PDF files selected"})
+        if payload["skipped_files"] and not invoice_paths and not payload["exceptions"]:
+            payload["exceptions"].append(_exception("", "pdf", "未发现可处理发票；全部 PDF 均为明确的非发票，请选择包含完整发票的目录。"))
         for sequence, pdf_path in enumerate(invoice_paths, 1):
             record, exceptions = extract_pdf_record(pdf_path, sequence)
             _extend_unique_exceptions(payload["exceptions"], exceptions)

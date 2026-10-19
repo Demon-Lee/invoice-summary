@@ -1,5 +1,6 @@
 """Business-style native presentation, separate from invoice operations."""
 import tkinter as tk
+from pathlib import Path
 from tkinter import ttk
 
 from . import __version__
@@ -110,6 +111,22 @@ def text_widget(parent, height=15):
     return AutoScrollText(parent, height=height, wrap="word", bg=PALETTE["surface"], fg=PALETTE["text"],
                         relief="flat", bd=0, padx=12, pady=8, font=(FONT, 9), state="disabled",
                         selectbackground=PALETTE["selected"], selectforeground=PALETTE["heading"])
+
+
+def skipped_pdf_notice(payload, *, limit=None):
+    skipped = payload.get("skipped_files", [])
+    if not skipped:
+        return ""
+    lines = [f"已跳过 {len(skipped)} 份非发票 PDF，未参与发票编号、改名、填表或金额统计："]
+    visible = skipped if limit is None else skipped[:limit]
+    for item in visible:
+        name = Path(item["pdf"]).name
+        if limit is not None and len(name) > 55:
+            name = name[:52] + "…"
+        lines.append("· " + name + "：" + item["reason"])
+    if len(visible) < len(skipped):
+        lines.append(f"另有 {len(skipped) - len(visible)} 份；完整文件名及原因见下方检查报告。")
+    return "\n".join(lines)
 
 
 def draw_stage_icon(canvas, tone, background, foreground):

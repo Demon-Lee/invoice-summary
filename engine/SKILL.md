@@ -23,6 +23,7 @@ Coordinate `scripts/invoice_pipeline.py` and `scripts/write_summary.mjs`. Treat 
 - 同一发票中的同序号、同产品名称、同规格型号明细必须保留为独立明细行，按发票原始顺序写入；不得因键重复而合并或跳过。
 - 数量为空时写入 1，并按金额除以 1 写入单价公式；零数量或非空非数值数量仍作为异常处理。
 - For a wrapped `*\u7c7b\u522b*\u9879\u76ee\u540d\u79f0`, reconstruct the complete value from adjacent project-column words before deleting the two-asterisk category. This reconstructed project name is used for both the Excel product name and the PDF filename's project-name portion.
+- 正常文本解析和坐标回退解析都要核对名称与规格的列归属：同一视觉行内完全位于项目名称列的普通文字片段，即使不含星号，也必须合入名称；规格取规格列实际文字，不按空格分词推断。按坐标保留同一视觉行的可见空格，跨行只去掉排版换行，不额外补空格；跨列的文字片段不能仅凭起点坐标当作名称。例如名称列首行 `VG101 VGA公`、次行 `对公线 1米`，规格列 `11673`，应得到名称 `VG101 VGA公对公线 1米`、规格 `11673`，同步用于 Excel 与 PDF 文件名。金额一致不能证明名称和规格正确，仍需核对这两个字段。
 - 只有项目名称列坐标范围内以 `*` 开头的文字才能作为新明细起点；规格型号列中的星号文本属于规格续行（例如 `*Φ6*30-50`），应追加到该明细的规格型号，并继续合并项目名称列续行。
 - 若产品文本以重复的前置星号类别段开头（例如 `*类别**类别*指示灯`），必须连续剥离每个完整的 `*类别*` 段，直至首字符不再是星号；产品名称应为剩余业务名称（示例为 `指示灯`），并同步用于 Excel 与 PDF 文件名。
 - 规格型号仅能取自商品明细所在行，或其紧邻的一行纯字母数字续行；一旦出现金额、合计、销方名称或其他非续行文字，即停止续接。不得把下方销售方纳税人识别号等元数据拼入规格型号。
@@ -35,9 +36,12 @@ Coordinate `scripts/invoice_pipeline.py` and `scripts/write_summary.mjs`. Treat 
 - 当 PDF 文本层将明细排在“合计”标签之后，或将相邻数量与单价粘连为一个 token 时，按页面坐标重建字段；仅在数量、单价和未税金额的拆分唯一且逐分校验通过时写入，否则作为异常保留，不得猜测。
 - 当明细因文本层顺序异常进入坐标回退解析时，仍必须合并项目名称列的续行，不能只保留首行。按视觉行顺序重建完整名称，保留拉丁品牌、型号以及同一视觉行独立词之间的可见空格；跨行仅消除排版换行，不得删除原有词间空格或把规格型号列内容误并入名称。
 
-## Verification-report exclusion
+## PDF classification and non-invoice exclusion
 
-- Before assigning invoice sequences, identify a verification report only from its PDF content: require a National VAT Invoice Verification Platform marker plus `查验次数` or `查验时间`. Exclude every identified report from invoice parsing, sorting, and sequence assignment. This is only a safeguard against misparsing: do not match, rename, validate, or report on these files, and never require one based on invoice amount.
+- 编号前使用 `scripts/invoice_pipeline.py` 的 `classify_pdf_document` 按 PDF 全部页面的实际文本分类，不从文件名推断，不把“发票字段解析失败”等同于“非发票”。有明确标题的验收／领用表、送货／出入库单、申请／报销表、报价／合同／说明书等，只有没有发票特征且每页均能确认为非发票时才自动跳过。含有发票页的混合文件继续发票识别，不得因其他页面为表单整份跳过。
+- 扫描件、损坏文件、无文本／类型不明的页面仍报异常；疑似发票仍须通过完整字段、明细和逐分金额校验，不能因为缺字段自动跳过。只跳过明确的非发票，不支持的版式须改进识别。
+- 查验报告仍要求 National VAT Invoice Verification Platform 标识加 `查验次数` 或 `查验时间`，按内容识别；若同页还出现独立原票标题，视为内容冲突并报告具体页号，不自动跳过。类型字段中的发票种类名称不作为原票标题。不将报告匹配、改名或纳入发票金额校验，也不按发票金额要求提供查验报告。
+- 所有明确跳过文件记录在结果的 `skipped_files`，含 `pdf`、`kind`、`reason`，在 preview／rename／verify 间保留。它们不占发票序号，不改名，不填表，不计入发票数量或金额。在预览和完成反馈的“异常”项目下另列“已跳过（非阻塞）”清单与原因，明确未参与上述处理；查验报告仅作跳过说明，不作为发票处理结果。没有任何可处理发票时停止，不得清空工作簿。
 
 ## Required safety gate
 
@@ -130,10 +134,14 @@ If verification fails, diagnose only the specific failure and make the smallest 
 
 ## Removing surplus blank data rows
 
-- Every formal write automatically removes the continuous blank rows after the final populated data row and before the validated unique `合计—签字—说明` footer, independently in `验收` and `领用`. Rows with any text, value, remark, or formula (including outside mapped invoice columns) count as populated; preserve internal blank rows and all invoice detail rows.
-- The three-row footer follows the last populated row directly. Preserve its cell contents, signature dates, borders, fonts, row heights, and merged cells while updating row coordinates and print-area references. Recompute quantity and amount SUM ranges for the shortened data area; use `=0` when there are no data rows.
-- The writer's `--dry-run` reports per-sheet `blankRowsToRemove` and does not change the workbook. Formal writing compacts the staged workbook before replacing the target and validates that no trailing blank data row remains. Then apply mixed fonts/recalculation and run the normal amount verification.
-- A later incremental run passes the complete directory preview (existing and new invoices) to the writer, expands the compacted data area when needed, and moves the complete footer down again. Do not pass only the new subset of records to this writer. For example, a template with headers in row 3 and 14 populated detail rows must end those details in row 17, followed by the footer in rows 18–20; it must not retain unused template rows 18–61.
+- `scripts/template_rules.json` 是与桌面软件共用的可同步模板规则；写表器读取其中的完整侧边标识、忽略标点和允许的单格／连续同列排列方式。`schema_version: 1` 的 `sidebar-label-end` 策略按工作簿实际坐标确定最低保留行，主表终列包括覆盖表头的合并区域。`label_value_source: literal-cells` 要求右侧模板内容为固定值，遇到右侧公式即停止并报告坐标，不依赖公式缓存判断标识。修改这些声明时同步维护本节说明；不能仅修改文档让软件自动生成算法。新增未支持的策略、接口或写表器算法需要先适配软件。
+
+- Every formal write automatically removes the removable continuous blank rows before the validated unique `合计—签字—说明` footer, independently in `验收` and `领用`. Rows with any text, value, remark, or formula (including outside mapped invoice columns) count as populated; preserve internal blank rows and all invoice detail rows.
+- 删除末尾多余空行时，动态定位主表右侧完整的“第二联：财务报销”标识；支持整句位于一个单元格，或在同一列连续多个单元格中逐字／分段排列。以该标识最后一个“销”字实际所在行作为模板最低保留行，不能固定为第 13 行，也不能仅搜索任意一个“销”字。每张表独立判断；没有该标识时沿用原删行规则，不从外部模板补字。
+- 明细区域最终保留到“最后有内容的行”和“模板最低保留行”中的较大者。项目较少时，两者之间的空白明细行必须保留原边框、样式和行高，不写入假序号、数量或金额；三行页脚紧随保留区域。若标识结束于第 13 行且最后一条明细在第 5 行，保留到第 13 行，合计在第 14 行；标识结束行变化时按实际行号计算。若明细超过该标识，则按更靠后的实际内容行确定页脚。
+- Preserve the footer's cell contents, signature dates, borders, fonts, row heights, and merged cells while updating row coordinates and print-area references. Recompute quantity and amount SUM ranges for the retained data area, including its required blank rows; use `=0` only when the retained data area has no rows. 标识已经落在合计、签字、说明行或其下方时，预览停止并报告实际结束行与合计行，要求恢复完整模板；不继续生成页脚在标识上方的结果，不自动从其他工作簿修复。
+- The writer's `--dry-run` reports per-sheet `blankRowsToRemove` and `minimumRetainedRows` (the actual one-based legend ending row, or `null` when absent), without changing the workbook. Formal writing compacts the staged workbook before replacing the target, checks that the original legend cells remain intact and the footer stays below the template minimum, and rejects removable blank rows below the retained area. Required blank rows up to the template minimum are valid. Then apply mixed fonts/recalculation and run the normal amount verification.
+- A later incremental run passes the complete directory preview (existing and new invoices) to the writer, expands the compacted data area when needed, and moves the complete footer down again. Do not pass only the new subset of records to this writer. For example, headers in row 3 and 14 populated detail rows place the final detail in row 17; when the side legend ends no later than row 17 and there is no other later content, the footer occupies rows 18–20 and unused template rows 18–61 are removed. A side legend ending later requires retaining data rows through its actual ending row instead.
 
 ## Verification
 
