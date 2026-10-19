@@ -3,6 +3,7 @@ import tkinter as tk
 from tkinter import ttk
 
 from . import __version__
+from .ui_actions import configure_action_styles, decorate_action_button
 from .ui_widgets import AutoHideScrollbar, AutoScrollText, ProportionalTreeviewColumns, ThinProgressbar
 
 FONT = "Microsoft YaHei UI"
@@ -52,6 +53,7 @@ def configure_theme(root):
     style.configure("TEntry", fieldbackground="#fafbfd", foreground="#53637b", bordercolor="#d9e1eb", lightcolor="#d9e1eb", darkcolor="#d9e1eb", padding=(8, 5))
     style.map("TEntry", bordercolor=[("focus", "#8caff7")], fieldbackground=[("disabled", "#f0f3f7")])
     configure_navigation(root, style)
+    configure_action_styles(root, style, font=FONT, background=PALETTE["background"])
     style.configure("Treeview", rowheight=30, font=(FONT, 9), background=PALETTE["surface"], fieldbackground=PALETTE["surface"], foreground="#445570", borderwidth=0)
     style.configure("Treeview.Heading", font=(FONT, 9, "bold"), padding=(8, 6), background="#f2f5f9", foreground="#53647c", borderwidth=0, relief="flat")
     style.map("Treeview", background=[("selected", PALETTE["selected"])], foreground=[("selected", "#17315c")])
@@ -208,16 +210,23 @@ def build_interface(app, *, execution_steps, necessary_conditions, process_notic
         app._button(files, button_name, action).grid(row=row, column=2, padx=(10, 0), pady=3)
     actions = ttk.Frame(process)
     actions.grid(row=3, column=0, sticky="ew", pady=(0, 7))
-    app.preview_button = app._button(actions, "只读预览", app._preview, style="Primary.TButton")
-    app.preview_button.pack(side="left", padx=(0, 8))
-    app.execute = app._button(actions, "执行处理", app._apply)
-    app.execute.pack(side="left", padx=(0, 8))
+    action_buttons = ttk.Frame(actions)
+    action_buttons.pack(fill="x")
+    app.preview_button = app._button(action_buttons, "只读预览", app._preview)
+    decorate_action_button(app.preview_button, "Preview")
+    app.preview_button.pack(side="left", padx=(0, 14))
+    app.execute = app._button(action_buttons, "执行处理", app._apply)
+    decorate_action_button(app.execute, "Execute")
+    app.execute.pack(side="left", padx=(0, 14))
     app.execute.configure(state="disabled")
-    app.correct_button = app._button(actions, "人工校正", app._edit_detail)
+    app.correct_button = app._button(action_buttons, "人工校正", app._edit_detail)
+    decorate_action_button(app.correct_button, "Correct")
     app.correct_button.pack(side="left")
     app.correct_button.configure(state="disabled")
-    app._button(actions, "打开工作簿", lambda: app._open(app.book.get()), style="Link.TButton").pack(side="right")
-    app._button(actions, "打开发票目录", lambda: app._open(app.pdf.get()), style="Link.TButton").pack(side="right", padx=(0, 4))
+    app._button(action_buttons, "打开工作簿", lambda: app._open(app.book.get()), style="Link.TButton").pack(side="right")
+    app._button(action_buttons, "打开发票目录", lambda: app._open(app.pdf.get()), style="Link.TButton").pack(side="right", padx=(0, 4))
+    app.action_hint = ttk.Label(actions, text="先只读预览，通过后可执行", foreground=PALETTE["muted"], font=(FONT, 9))
+    app.action_hint.pack(anchor="w", padx=4, pady=(3, 0))
     app.stage_card = surface(process, padding=9)
     app.stage_card.grid(row=4, column=0, sticky="ew", pady=(0, 7))
     app.stage_card.columnconfigure(1, weight=1)

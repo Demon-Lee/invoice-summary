@@ -215,12 +215,26 @@ class App:
 
     def _update_action_styles(self):
         execute_primary = not self.busy and str(self.execute.cget("state")) == "normal"
-        for widget, style_name in (
-            (self.execute, "Primary.TButton" if execute_primary else "Secondary.TButton"),
-            (self.preview_button, "Secondary.TButton" if execute_primary or self.busy else "Primary.TButton"),
+        stage = self.operation_stage if self.busy else None
+        preview = self.preview_result
+        preview_label = "重新预览（清除校正）" if preview and preview.corrections and not preview.resume_pending else "只读预览"
+        for widget, label in (
+            (self.preview_button, "正在预览…" if stage == "preview" else preview_label),
+            (self.execute, "正在处理…" if stage == "execute" else "执行处理"),
         ):
-            if str(widget.cget("style")) != style_name:
-                widget.configure(style=style_name)
+            if widget.cget("text") != label:
+                widget.configure(text=label)
+        for widget in (self.preview_button, self.execute, self.correct_button):
+            cursor = "arrow" if widget.instate(("disabled",)) else "hand2"
+            if str(widget.cget("cursor")) != cursor:
+                widget.configure(cursor=cursor)
+        hint = ("正在预览，请稍候…" if stage == "preview" else
+                "正在处理，请稍候…" if stage == "execute" else
+                "正在检查人工校正，请稍候…" if stage == "correction" else
+                "正在处理，请稍候…" if self.busy else
+                "预览已通过，可以执行处理" if execute_primary else "先只读预览，通过后可执行")
+        if self.action_hint.cget("text") != hint:
+            self.action_hint.configure(text=hint)
         if getattr(self, "stage_tone", None) == "success":
             badge = "可以执行" if execute_primary else "阶段完成"
             if self.stage_badge.cget("text") != badge:
