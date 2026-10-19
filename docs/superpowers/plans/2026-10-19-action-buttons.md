@@ -36,7 +36,7 @@
 - [x] 记录当前规则 active.json、所有快照文件哈希及旧 EXE；检查 dist/build/release 路径与重解析点，再运行 tools/build.ps1 -Python .build-venv/Scripts/python.exe，退出 0。
 - [x] 比较归档内新模块／ui／App 的编译代码与当前源，核对构建规则、文档及 EXE。
 - [x] 再次核对进程与规则无并发变化；暂存构建目录，保留 InvoiceSummary-1.1.6-archive，替换 release/InvoiceSummary。
-- [ ] 提交实现及记录后运行 tools/package_release.py --directory release/InvoiceSummary，逐成员核对 Windows 包、源码包和 SHA256.json；记录实际检查范围及未运行的 GUI／业务流程。
+- [x] 提交实现及记录后运行 tools/package_release.py --directory release/InvoiceSummary，逐成员核对 Windows 包、源码包和 SHA256.json；记录实际检查范围及未运行的 GUI／业务流程。
 
 ## 已执行记录
 
@@ -46,4 +46,5 @@
 - 最终 PYZ 中四个应用模块编译代码与源码一致，PIL.ImageTk／ImageDraw 及 _imagingtk 二进制均存在。13 个活动／上一版规则文件及指针逐文件一致，三个发布说明与源文件一致。
 - 发布目录 1309 文件逐个 SHA-256 核对；原目录归档为 release/InvoiceSummary-1.1.6-archive-20261019-170537，再替换原路径。
 - 新 EXE SHA-256：6bdf5771ab5160cd3d3d2e813ec9968c731defcc757b515a5b1b53a3f7189513。
+- 实现提交 8f3b4a8；Windows 压缩包 1309 成员、源码包 111 成员均逐个读取核对，清单及 SHA256.json 一致。最终记录提交后重新包装并重核源码包，校验记录保存在忽略目录 .superpowers/action-buttons-package-verification.json。
 - 未运行测试、GUI 或 PDF／Excel 业务流程；实际观感和 DPI／键盘交互未经运行确认。本次不上传 GitHub。
