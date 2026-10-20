@@ -11,6 +11,8 @@ ROLES = {
                 "border": "#2059d5", "hover_border": "#194bb7", "ink": "#ffffff"},
     "Correct": {"fill": "#ffffff", "hover": "#f7f9fc", "pressed": "#e9eef5",
                 "border": "#c1ccdc", "hover_border": "#8e9fb8", "ink": "#4b5e79"},
+    "Export": {"fill": "#ffffff", "hover": "#edf4ff", "pressed": "#e2ebf9",
+               "border": "#afbfda", "hover_border": "#7398d4", "ink": "#345e9b"},
 }
 DISABLED_INK = "#8a97aa"
 
@@ -49,6 +51,11 @@ def _icon_image(role, color, scale):
         draw.line(points((11, 11, 16, 16)), fill=color, width=width)
     elif role == "Execute":
         draw.polygon([points(p) for p in ((4, 2), (15, 9), (4, 16))], fill=color)
+    elif role == "Export":
+        draw.line(points((10, 16, 3, 16, 3, 2, 11, 2, 15, 6, 15, 9)), fill=color, width=width)
+        draw.line(points((11, 2, 11, 6, 15, 6)), fill=color, width=width)
+        draw.line(points((15, 10, 15, 16)), fill=color, width=width)
+        draw.line(points((12, 13, 15, 16, 18, 13)), fill=color, width=width)
     else:
         draw.polygon([points(p) for p in ((3, 11), (11, 3), (15, 7), (7, 15), (2, 16))],
                      outline=color, width=width)

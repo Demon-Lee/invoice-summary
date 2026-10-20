@@ -48,10 +48,10 @@ def load_engine(directory, name):
 
 
 class ExcelAdapter:
-    def _run(self, script, extra):
+    def _run(self, script, extra, *, timeout=240):
         args = ["powershell.exe", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", str(script), *extra]
         try:
-            result = subprocess.run(args, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=240,
+            result = subprocess.run(args, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=timeout,
                                     creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
         except (OSError, subprocess.TimeoutExpired) as exc:
             raise ValueError(f"Excel 操作未完成：{exc}") from exc
@@ -73,6 +73,12 @@ class ExcelAdapter:
 
     def apply(self, script, workbook):
         self._run(resource_root() / "resources/run_excel.ps1", ["-EngineScript", str(script), "-WorkbookInput", str(workbook)])
+
+    def export_pdf(self, workbook, plan_file, output_dir, report_file):
+        self._run(resource_root() / "resources/export_pdf.ps1", [
+            "-WorkbookInput", str(workbook), "-PlanFile", str(plan_file),
+            "-OutputDirectory", str(output_dir), "-ReportFile", str(report_file),
+        ], timeout=270)
 
 
 @dataclass
