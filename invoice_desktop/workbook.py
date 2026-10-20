@@ -373,8 +373,10 @@ def plan_workbook(path, payload, run_date=None, *, template_rules=None):
         rows = _rows(payload)
         if not rows:
             raise ValueError("没有可重填的发票明细，未清空工作簿")
-        day = run_date or datetime.date.today()
-        date_text = f"{day.year}.{day.month}.{day.day}"
+        issue_day = run_date or datetime.date.today()
+        acceptance_day = issue_day - datetime.timedelta(days=1)
+        issue_date_text = f"{issue_day.year}.{issue_day.month}.{issue_day.day}"
+        acceptance_date_text = f"{acceptance_day.year}.{acceptance_day.month}.{acceptance_day.day}"
         removed, details, added_counts, matching = {}, {}, [], []
         formulas = [(ws.title, c.row, c.column, c.value) for ws in wb for row in ws for c in row if c.data_type == "f"]
         row_maps, regenerated, discarded, fixed_areas, margins = {}, set(), set(), {}, {}
@@ -441,7 +443,7 @@ def plan_workbook(path, payload, run_date=None, *, template_rules=None):
             for label in ("数量", "金额"):
                 letter = get_column_letter(columns[label])
                 ws.cell(footer, columns[label], f"=SUM({letter}{header+1}:{letter}{footer-1})" if footer > header+1 else "=0")
-            ws.cell(footer+1, date_col, date_text)
+            ws.cell(footer+1, date_col, acceptance_date_text if name == "验收" else issue_date_text)
             details[name] = {"headerRow": header, "footerRow": footer, "columns": columns, "detailLastColumn": last_column, "fixedTextCellsToPreserve": sum(c.value is not None for c in margin.values()), "rowsToAdd": added_counts[-1], "rowsToCorrect": 0, "blankRowsToRemove": count, "oldRowsToClear": old_count, "rowsToFill": len(rows), "minimumRetainedRow": minimum_row, "requiredBlankRows": last-header-len(rows)}
             inspect_sheet(ws)
         moved = any(old != new for mapping in row_maps.values() for old, new in mapping.items())

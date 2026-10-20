@@ -15,7 +15,7 @@ import zipfile
 from pathlib import Path
 
 from .policy import (SHARED_FILES, LEGACY_SHARED_FILES, shared_scope, validate_scope, snapshot_files,
-                     LEGACY_WRITER_SHA256, TEMPLATE_WRITER_SHA256)
+                     LEGACY_WRITER_SHA256, SUPPORTED_TEMPLATE_WRITER_SHA256S)
 from .template_rules import read_template_rules
 
 FILES = SHARED_FILES
@@ -209,8 +209,8 @@ def _validate_output_contract(modules):
 
 def check_application_contract(candidate, supported):
     validate_scope(candidate)
-    expected = TEMPLATE_WRITER_SHA256 if candidate["format_version"] == 3 else LEGACY_WRITER_SHA256
-    if candidate["source_writer_sha256"] != expected:
+    expected = SUPPORTED_TEMPLATE_WRITER_SHA256S if candidate["format_version"] == 3 else {LEGACY_WRITER_SHA256}
+    if candidate["source_writer_sha256"] not in expected:
         raise ValueError("skill 写表组件发生了软件尚未支持的变化，须适配软件后再同步。受支持的模板规则文件可直接同步；人工校正和清空重填策略会保留。")
 
 
@@ -227,7 +227,8 @@ def changed_files(candidate, baseline):
 def check_compatible(candidate, baseline):
     check_application_contract(candidate, baseline)
     changed = [name for name in FILES if candidate["files"].get(name) != baseline["files"].get(name)]
-    if changed == ["SKILL.md"]:
+    writer_changed = candidate["source_writer_sha256"] != baseline["source_writer_sha256"]
+    if changed == ["SKILL.md"] and not writer_changed:
         raise ValueError("只有规则说明变化，尚无对应脚本改进；请完成 skill 脚本适配后再同步")
     return changed_files(candidate, baseline)
 

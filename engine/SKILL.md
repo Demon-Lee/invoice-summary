@@ -112,7 +112,7 @@ If verification fails, diagnose only the specific failure and make the smallest 
 
 ## Workbook run-date contract
 
-- On every formal workbook write, read the machine-local date once and write the same `YYYY.M.D` value, without zero padding, into both footer signature rows.
+- On every formal workbook write, read the machine-local calendar date once. Write that date in `YYYY.M.D` format without zero padding to the `领用` footer, and write the immediately preceding local calendar day to the `验收` footer. Compute the previous day by calendar-date arithmetic, including month and year boundaries.
 - In `验收`, require exactly one `验收日期：` label in the validated signature row and replace the cell immediately to its right. In `领用`, apply the same rule to `领用日期：`.
 - If either label is missing, duplicated, or has no adjacent date cell, stop and report the worksheet and row instead of guessing a destination.
 - `--dry-run` may validate this contract in memory but must not save a workbook or change the input file.

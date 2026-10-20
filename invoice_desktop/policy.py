@@ -8,7 +8,11 @@ WORKBOOK_CONTRACT_VERSION = 1
 TEMPLATE_RULES_CONTRACT_VERSION = 1
 # Pin the skill adapters whose common template contract was reviewed.
 LEGACY_WRITER_SHA256 = "6b196680c47d483ec11c3216282b2147781e02420f38a47c627c879e8777a2b9"
-TEMPLATE_WRITER_SHA256 = "a2392109e01f7d3ae7ae2e57769dd7b7dbedb291539d0b339a21f8b438853a85"
+TEMPLATE_WRITER_SHA256 = "aa8b7aac7fb0ce62e1771d0a41aec821c4898b28a99ce5dc0a250f0ff6b2a9b7"
+SUPPORTED_TEMPLATE_WRITER_SHA256S = frozenset({
+    "a2392109e01f7d3ae7ae2e57769dd7b7dbedb291539d0b339a21f8b438853a85",
+    TEMPLATE_WRITER_SHA256,
+})
 
 
 def shared_scope(format_version=3):
@@ -74,7 +78,7 @@ PDF 内容分类（只跳过明确非发票）、识别、字段提取与规范�
 这些功能由软件自身管理，同步、导入或回退 skill 规则均会保留。人工校正只作用于本次处理，不回写或训练 skill。
 
 三、双方共同遵守：数据与模板约定
-字段含义、金额精度、发票和明细序号、表头、三行页脚、签字日期、单价和合计，以及识别、改名、金额采集与验证接口。
+字段含义、金额精度、发票和明细序号、表头、三行页脚、签字日期（领用为本机当天，验收为前一日）、单价和合计，以及识别、改名、金额采集与验证接口。
 更新包的范围或接口版本不兼容时停止导入。受支持的模板规则声明可直接同步；仅修改 SKILL.md 不会生成算法。新增未支持的模板策略或未知写表组件变化时，须适配软件后重新发布；软件的人工校正和清空重填策略继续保留。
 
 软件执行流程

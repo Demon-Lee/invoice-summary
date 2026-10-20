@@ -1,18 +1,18 @@
 {
   "format_version": 3,
   "files": {
-    "SKILL.md": "f7c370ddba36448e2b0df735406fbff24f40c2a5a4ccfd9ee6eb0bb4e9c0fec5",
+    "SKILL.md": "80cb1bed6b10d7488df12874f52ab42aca0859eddf8130a6c4da21e7789acd63",
     "invoice_pipeline.py": "7315ed60bda80d7823d64ae46bee2a88374fdf851384795f2bb378bfb1e823e0",
     "collect_excel_totals.py": "da91dc743d0d6350d0856d2025ede74fb63cf811ffa947dcffb934b92a0b6064",
     "apply_mixed_fonts_excel.ps1": "9ddc063ec93db575a9d433f85db677601cfabffcbdf7be5e66ae1488eb843318",
     "template_rules.json": "624304c76bab635ce46b71bdd67ed9bd1acbd98fb417e68a1d73b782b82f0ba7"
   },
-  "source_writer_sha256": "a2392109e01f7d3ae7ae2e57769dd7b7dbedb291539d0b339a21f8b438853a85",
+  "source_writer_sha256": "aa8b7aac7fb0ce62e1771d0a41aec821c4898b28a99ce5dc0a250f0ff6b2a9b7",
   "scope": {
     "update_scope": "shared-invoice-rules",
     "data_contract_version": 1,
     "workbook_contract_version": 1,
     "template_rules_contract_version": 1
   },
-  "version": "38af3849e1ca"
+  "version": "280db9d722ae"
 }

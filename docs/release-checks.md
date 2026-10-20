@@ -197,3 +197,11 @@
 - 发布前两次检查原路径程序未运行，核对绝对路径、重解析点、原 EXE、暂存 EXE 与规则文件；1.1.6 已放回 D:\Workspace\发票专题\invoice-desktop\release\InvoiceSummary。旧目录保留为 release/InvoiceSummary-1.1.5-archive，旧 ZIP 保留。构建／暂存／发布 EXE SHA256 同为 2b8f28b94b93891fe868b6602125e48c0fcffae2317ceccfdd3c5a357142bd9c。
 - 实现提交 25a860e。从实际发布目录生成发票汇总助手-1.1.6-Windows.zip（40,687,805 字节、1308 项）及源码 ZIP（108 项），逐成员字节与发布文件／Git 跟踪源码一致，EXE、规则快照哈希及两份说明匹配，无业务 PDF／工作簿。Windows ZIP SHA256 为 524eed184ff6792e84a4210b68499c9b4a49494ca701b4327b0fe6238d4b1272，校验值记录于 release/SHA256.json；记录提交后重新包装源码，包含最终文档。
 - 本次未新增或运行测试，未启动 GUI、诊断、同步／导入接口或 PDF／Excel 流程。实际显示效果未经运行确认；静态复审、编译归档和构建不等于视觉运行验证。
+
+## 1.1.9：领用当天、验收前一天
+
+- 正式写入只读取一次本机日期：`领用`写当天，`验收`写前一个本地日历日，格式继续使用无补零的 `YYYY.M.D`。skill 与软件两套写表实现、skill 规则和使用说明均已同步；桌面写表器以日历日期减一天，支持跨月和跨年。
+- 软件将当前受支持的模板写表器指纹更新为 `aa8b7aac7fb0ce62e1771d0a41aec821c4898b28a99ce5dc0a250f0ff6b2a9b7`，保留上个发行版指纹 `a2392109e01f7d3ae7ae2e57769dd7b7dbedb291539d0b339a21f8b438853a85` 以支持现有快照及回退；未知写表器仍会阻止同步。同步判定会把写表器变化计为脚本适配，不会误判为只有规则说明变化。
+- 随包规则清单更新为 `280db9d722ae`。通过软件更新流程同步本机 skill 后，活动规则为 `280db9d722ae`，回退规则保留为 `38af3849e1ca`；接口兼容检查通过。Windows 目录版由 PyInstaller 6.22.3 构建成功，发布 EXE SHA256 为 `1f63fa4fe2d4aaa9cfce3ce40f8647f93e17522d96ecb50186dd5b55fd6d0d67`。
+- 发布目录 `release/InvoiceSummary` 更新为 1.1.9，原目录保留在 `release/InvoiceSummary-1.1.8-archive`。生成 Windows 包 `发票汇总助手-1.1.9-Windows.zip`，1316 项，不含 PDF 或 Excel 业务文件；SHA256 为 `6c7e70bcb88e8311bc19117d5c9a99d6db532cefd3cc7b854311dcfa45b2b7b8`。Windows 与源码包校验值记录在 `release/SHA256.json`。
+- 按任务约束没有运行测试套件、启动 GUI 或处理真实 PDF／工作簿。构建包、日期规则快照哈希、随包说明版本及便携规则完整性已检查；这不代表桌面界面或实际 Excel 写入流程已运行验证。

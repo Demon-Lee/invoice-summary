@@ -31,7 +31,7 @@ class WorkbookTests(unittest.TestCase):
         one = payload()["records"][0]["rows"][0]
         one["quantity"] = ""
         two = dict(one, quantity="2", amount="5.66")
-        plan = plan_workbook(self.path, payload([one, two]), datetime.date(2026, 10, 12))
+        plan = plan_workbook(self.path, payload([one, two]), datetime.date(2026, 1, 1))
         write_workbook(plan)
         wb = load_workbook(self.path)
         self.addCleanup(wb.close)
@@ -40,7 +40,8 @@ class WorkbookTests(unittest.TestCase):
         self.assertEqual(wb["验收"]["F4"].value, "=G4/E4")
         self.assertEqual(wb["领用"]["F5"].value, 2.83)
         self.assertIsNone(wb["领用"]["H4"].value)
-        self.assertEqual(wb["验收"]["H7"].value, "2026.10.12")
+        self.assertEqual(wb["验收"]["H7"].value, "2025.12.31")
+        self.assertEqual(wb["领用"]["H7"].value, "2026.1.1")
         self.assertEqual(wb["验收"]["G6"].value, "=SUM(G4:G5)")
 
     def test_expansion_and_compaction_preserve_footer_height_merges_print_area(self):
