@@ -16,7 +16,7 @@ def choose_export_directory(root, workbook):
     ttk.Label(dialog, text="分别生成两份 PDF", font=("Microsoft YaHei UI", 12, "bold")).grid(row=0, column=0, sticky="w")
     ttk.Label(dialog, text="验收单.pdf  ·  领用单.pdf\nA4 横向，所有列在一页宽；明细较多时向下自动分页。",
               justify="left").grid(row=1, column=0, sticky="w", pady=(8, 12))
-    note = ttk.Label(dialog, text="导出工作簿已保存的内容。若本次只做了预览或人工校正，请先完成“执行处理”，再导出更新后的表格。",
+    note = ttk.Label(dialog, text="导出本次执行处理并通过金额核对后保存的表格。更换输入或重新预览后，须再次执行成功才可导出；工作簿外部修改后也须重新处理。",
                      wraplength=520, justify="left", foreground="#946522")
     note.grid(row=2, column=0, sticky="ew", pady=(0, 14))
     ttk.Label(dialog, text="保存位置").grid(row=3, column=0, sticky="w")

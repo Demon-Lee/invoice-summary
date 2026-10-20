@@ -17,6 +17,10 @@ from .workbook import HEADERS, SIGNERS, text
 OUTPUTS = {"验收": "验收单.pdf", "领用": "领用单.pdf"}
 
 
+class ProcessedWorkbookChanged(ValueError):
+    """The saved workbook no longer matches the completed processing run."""
+
+
 def _reparse(path):
     return bool(path.lstat().st_file_attributes & stat.FILE_ATTRIBUTE_REPARSE_POINT) if os.name == "nt" else path.is_symlink()
 
@@ -161,7 +165,7 @@ def _publish_pair(stage, directory, approved, installed):
         raise ValueError(f"发布未完成，已恢复原有 PDF（如有）：{exc}") from exc
 
 
-def export_workbook_pdfs(workbook, directory, approved, *, progress=None, excel=None):
+def export_workbook_pdfs(workbook, directory, approved, *, progress=None, excel=None, expected_workbook_sha256=None):
     progress = progress or (lambda message: None)
     workbook, directory = Path(workbook).resolve(), Path(directory).resolve()
     result = {"status": "failed", "workbook": str(workbook), "output_dir": str(directory), "files": [], "cleanup": "完成"}
@@ -171,6 +175,8 @@ def export_workbook_pdfs(workbook, directory, approved, *, progress=None, excel=
     temp_parent = Path(tempfile.gettempdir()).resolve()
     try:
         if workbook.suffix.lower() != ".xlsx" or not workbook.is_file():
+            if expected_workbook_sha256 is not None:
+                raise ProcessedWorkbookChanged("本次处理完成的工作簿已不可用，请重新预览并执行处理后再导出")
             raise ValueError("请选择已有的 .xlsx 工作簿")
         if not isinstance(approved, dict) or set(approved) != set(OUTPUTS.values()):
             raise ValueError("导出文件确认信息不完整，请重新导出")
@@ -180,8 +186,12 @@ def export_workbook_pdfs(workbook, directory, approved, *, progress=None, excel=
         scratch = Path(tempfile.mkdtemp(prefix="invoice-pdf-input-", dir=temp_parent)).resolve()
         snapshot = scratch / "workbook.xlsx"
         before = sha256(workbook)
+        if expected_workbook_sha256 is not None and before != expected_workbook_sha256:
+            raise ProcessedWorkbookChanged("工作簿在本次执行完成后发生变化，请重新预览并执行处理后再导出")
         shutil.copyfile(workbook, snapshot)
         if sha256(snapshot) != before or sha256(workbook) != before:
+            if expected_workbook_sha256 is not None:
+                raise ProcessedWorkbookChanged("工作簿在读取期间发生变化，请重新预览并执行处理后再导出")
             raise ValueError("工作簿在读取期间发生变化，请保存并关闭后重新导出")
         plan = _print_plan(snapshot)
         directory.mkdir(parents=True, exist_ok=True)
@@ -200,6 +210,12 @@ def export_workbook_pdfs(workbook, directory, approved, *, progress=None, excel=
         result.update(status="completed", files=[dict(item, path=str(directory / item["name"])) for item in files])
     except Exception as exc:
         result["error"] = str(exc)
+        missing_source = (expected_workbook_sha256 is not None and isinstance(exc, FileNotFoundError)
+                          and str(exc.filename).casefold() == str(workbook).casefold())
+        if isinstance(exc, ProcessedWorkbookChanged) or missing_source:
+            result["requires_processing"] = True
+            if missing_source:
+                result["error"] = "本次处理完成的工作簿已不存在，请重新预览并执行处理后再导出"
     finally:
         cleanup_errors = []
         if installed and not published:

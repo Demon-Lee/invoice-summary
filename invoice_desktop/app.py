@@ -12,7 +12,7 @@ from tkinter import filedialog, messagebox, ttk
 
 from . import __version__
 from .controller import Controller, resource_root, application_root
-from .updates import EngineStore, export_update, read_manifest, SharedInterfaceIncompatible
+from .updates import EngineStore, export_update, read_manifest, SharedInterfaceIncompatible, sha256
 from .corrections import FIELDS, LABELS, field_value, normalize
 from .policy import BOUNDARY_GUIDE, RETAINED_FEATURES, describe_changes
 from .ui import FONT, PALETTE, build_interface, set_stage_style, surface, text_widget, skipped_pdf_notice
@@ -57,8 +57,8 @@ HELP = "\n".join(("执行步骤", *EXECUTION_STEPS, "", PROCESS_NOTICE, "", "必
 使用新版共享规则时，按内容明确识别出的验收单、领用单等非发票 PDF 会自动跳过，不参与发票编号、改名、填表或金额统计。完成弹窗列出跳过文件，超过八项时完整清单见检查报告。扫描件、损坏文件、类型不明或疑似发票缺字段仍提示异常；目录中没有可处理发票时禁止执行。
 
 导出 PDF
-填表完成后点击“导出 PDF”，也可直接选择已有的完成工作簿导出。弹窗选择保存位置，默认为工作簿旁的“导出PDF”文件夹，分别生成“验收单.pdf”和“领用单.pdf”。A4 横向，所有列保持一页宽，行数多时向下自动分页。完成后可点击“打开导出目录”。
-导出读取工作簿已保存的内容；只读预览和人工校正须先执行处理才会写入。导出不重填工作簿，也不保存临时打印设置；不会重新核对发票金额。同名 PDF 经确认才替换，失败时查看原因后重试。PDF 导出由软件维护，skill 同步不会改动此功能。
+本次执行处理并通过金额核对后，“导出 PDF”才会启用。仅选择文件、完成预览或人工校正均不能导出；更换输入、重新预览、更新已使用规则或重启软件后，须重新预览并执行成功。弹窗选择保存位置，默认为工作簿旁的“导出PDF”文件夹，分别生成“验收单.pdf”和“领用单.pdf”。A4 横向，所有列保持一页宽，行数多时向下自动分页。完成后可点击“打开导出目录”。
+导出前检查工作簿仍与本次处理完成的版本一致；外部修改后需重新预览并执行。导出不重填工作簿，也不保存临时打印设置；不会重新核对发票金额。同名 PDF 经确认才替换，普通导出失败可重试，成功后也可重复导出。PDF 导出由软件维护，skill 同步不会改动此功能。
 
 人工校正
 预览结束后，明细标题旁突出显示“双击明细，可人工校正”。双击需要修改的明细，或选中后按 Enter。对照原 PDF 校正产品名称、规格型号、单位、数量、含税金额和生产厂家，单价自动计算。保存后重新检查金额、文件名和工作簿映射；通过后才可执行。“恢复识别值”可撤销该行校正。
@@ -126,6 +126,7 @@ class App:
         self._source_saved_report = None
         self.controller = None
         self.last_result = None
+        self._pdf_export_receipt = None
         self.last_pdf_output_dir = None
         self._last_pdf_report = None
         self._pdf_report_base = ""
@@ -246,6 +247,25 @@ class App:
                                        highlightbackground="#e6c987" if active else PALETTE["line"],
                                        image=self.root._correction_icons[0 if active else 1])
 
+    def _can_export_pdf(self):
+        receipt = self._pdf_export_receipt
+        return bool(not self.busy and receipt
+                    and receipt["inputs"] == (self.pdf.get(), self.book.get()))
+
+    def _refresh_pdf_export_receipt(self):
+        """Check pinned rules on events/source ticks, not action-style refresh."""
+        receipt = self._pdf_export_receipt
+        if receipt is None:
+            return None
+        try:
+            if self.store.version() == receipt["engine_version"]:
+                return None
+            reason = "共享规则版本已变化，请重新预览并执行处理后再导出 PDF。"
+        except Exception:
+            reason = "共享规则版本暂无法确认，请解决规则问题后重新预览并执行处理。"
+        self._pdf_export_receipt = None
+        return reason
+
     def _update_action_styles(self):
         execute_primary = not self.busy and str(self.execute.cget("state")) == "normal"
         stage = self.operation_stage if self.busy else None
@@ -258,7 +278,7 @@ class App:
         ):
             if widget.cget("text") != label:
                 widget.configure(text=label)
-        export_enabled = not self.busy and self.book.get().strip().lower().endswith(".xlsx")
+        export_enabled = self._can_export_pdf()
         export_state = "normal" if export_enabled else "disabled"
         if str(self.pdf_export_button.cget("state")) != export_state:
             self.pdf_export_button.configure(state=export_state)
@@ -281,7 +301,8 @@ class App:
                 "正在检查人工校正，请稍候…" if stage == "correction" else
                 "正在导出 PDF，请稍候…" if stage == "export" else
                 "正在处理，请稍候…" if self.busy else
-                "预览已通过，可以执行处理" if execute_primary else "先只读预览，通过后可执行")
+                "预览已通过，可以执行处理" if execute_primary else
+                "处理已完成，可导出 PDF" if export_enabled else "先预览并执行成功，再导出 PDF")
         if self.action_hint.cget("text") != hint:
             self.action_hint.configure(text=hint)
         if getattr(self, "stage_tone", None) == "success":
@@ -345,6 +366,7 @@ class App:
                     self._restoring_inputs = False
                 return
         self.preview_result = None
+        self._pdf_export_receipt = None
         self._update_preview_note()
         self._update_metrics()
         self.execute.configure(state="disabled")
@@ -399,6 +421,7 @@ class App:
             self._shown_source_issue = key
 
     def _restore_source_preview(self):
+        self._refresh_pdf_export_receipt()
         saved_report = self._source_saved_report
         self._source_saved_report = self._shown_source_issue = None
         if self.preview_result:
@@ -410,7 +433,10 @@ class App:
             else:
                 self._render_preview(self.preview_result, phase="原预览")
         else:
-            self._invalidate()
+            if self._can_export_pdf():
+                self._set_stage("success", "本次处理已完成，可导出 PDF", "工作簿已通过本次金额核对，可继续导出 PDF。")
+            else:
+                self._invalidate()
             if saved_report is not None:
                 self._set_text(self.report, saved_report)
 
@@ -437,12 +463,16 @@ class App:
 
     def _periodic_source(self):
         if not self.busy and not self._confirming_discard:
+            export_issue = self._refresh_pdf_export_receipt()
             previous_issue = self.source_issue
             problem = self._check_source()
             if problem:
                 self._show_source_problem(problem)
-            elif previous_issue:
-                self._restore_source_preview()
+            else:
+                if previous_issue:
+                    self._restore_source_preview()
+                if export_issue:
+                    self._complete_stage("warning", "PDF 导出需重新处理", export_issue)
         self.root.after(3000, self._periodic_source)
 
     def _refresh_version(self):
@@ -453,6 +483,8 @@ class App:
     def _run(self, work, done, *, stage=None):
         if self.busy:
             return
+        if stage in ("preview", "correction", "execute"):
+            self._pdf_export_receipt = None
         self.busy = True
         self.operation_stage = stage
         if stage:
@@ -502,19 +534,26 @@ class App:
                     event[1](event[2])
                 else:
                     retained = self.preview_result
+                    export_issue = self._refresh_pdf_export_receipt()
+                    completed_export_ready = not retained and self._can_export_pdf()
                     validity_problem = self._preview_problem(retained) if retained else None
                     current = retained and validity_problem is None
                     if current:
                         self._render_preview(retained, phase="原预览")
                     elif not retained:
-                        self._invalidate()
+                        if not completed_export_ready:
+                            self._invalidate()
                     else:
                         self.execute.configure(state="disabled")
                         self._correction_hint_enabled = False
                     note = "\n原预览和已保存校正已保留；本次失败的修改未保存。" if retained else ""
+                    if completed_export_ready:
+                        note += "\n此前已完成的处理结果保留，可继续导出 PDF。"
+                    elif export_issue:
+                        note += "\n" + export_issue
                     if validity_problem:
                         note += "\n原预览已失效：" + validity_problem + "；原校正仅供核对，须重新预览。"
-                    previous_report = "\n\n原检查报告：\n" + self.report.get("1.0", "end-1c") if retained else ""
+                    previous_report = "\n\n原检查报告：\n" + self.report.get("1.0", "end-1c") if retained or completed_export_ready else ""
                     self.status.set("未完成，请查看原因")
                     self._set_text(self.report, "本次操作未完成\n原因：" + event[1] + note + previous_report)
                     if stage:
@@ -522,7 +561,7 @@ class App:
                         detail = "原预览和已保存校正已保留。请解决下方原因后重试本次操作。" if current else "原校正保留供核对，预览已失效；请解决下方原因后重新预览。" if retained else "请查看下方原因，解决问题后重新进行只读预览。"
                         self._complete_stage("error", title, detail, notify=True, reason=event[1])
                     else:
-                        messagebox.showerror("操作未完成", event[1], parent=self.root)
+                        messagebox.showerror("操作未完成", event[1] + note, parent=self.root)
         except queue.Empty:
             pass
         self._update_action_styles()
@@ -715,10 +754,28 @@ class App:
         if stale:
             self._show_stale_preview(stale, notify=True)
             return
-        self._run(lambda: self.controller.apply(preview), self._render_result, stage="execute")
+        inputs = (self.pdf.get(), self.book.get())
+        controller = self.controller
+        def work():
+            result = dict(controller.apply(preview))
+            if result["status"] == "completed":
+                try:
+                    result["_pdf_export_receipt"] = {
+                        "inputs": inputs, "workbook": str(preview.workbook),
+                        "sha256": sha256(preview.workbook), "engine_version": preview.engine_version,
+                    }
+                except OSError as exc:
+                    result["_pdf_export_blocked"] = "无法读取处理完成的工作簿，PDF 导出暂不可用：" + str(exc) + "；请关闭相关文件后重新预览并执行处理。"
+            return result
+        self._run(work, self._render_result, stage="execute")
 
     def _render_result(self, result):
         self.last_result = result
+        self._pdf_export_receipt = result.get("_pdf_export_receipt") if result["status"] == "completed" else None
+        export_issue = self._refresh_pdf_export_receipt()
+        if export_issue:
+            result["_pdf_export_blocked"] = export_issue
+        export_ready = self._can_export_pdf()
         self.preview_result = None
         self._update_preview_note()
         self._correction_hint_enabled = False
@@ -732,9 +789,13 @@ class App:
             parts.append(notice)
         if result.get("error"):
             parts.append("原因：" + result["error"])
+        if result.get("_pdf_export_blocked"):
+            parts.append(result["_pdf_export_blocked"])
         if result.get("verification", {}).get("exceptions"):
             parts.append("异常：" + json.dumps(result["verification"]["exceptions"], ensure_ascii=False))
-        parts.append("下一步：解决原因后重新预览，可继续未完成流程。" if result["status"] == "failed" else "下一步：打开工作簿查看结果，或点击“导出 PDF”；继续处理前重新预览。")
+        parts.append("下一步：解决原因后重新预览，可继续未完成流程。" if result["status"] == "failed" else
+                     "下一步：可打开工作簿查看结果，或导出本次已完成表格的 PDF；重新预览后须再次执行成功才可导出。" if export_ready else
+                     "下一步：打开工作簿查看结果；需完成本次预览、执行及金额核对后才可导出 PDF。")
         parts.append("已执行：" + "、".join(result.get("completed", [])))
         parts.extend(self._correction_lines(result.get("original_payload", {}), result.get("corrections", {})))
         if result.get("rename_plan"):
@@ -748,14 +809,17 @@ class App:
         if totals:
             parts.append(f"PDF 合计 ¥{result['total']} · 验收合计 ¥{totals.get('acceptance_footer_total')} · 领用合计 ¥{totals.get('issue_footer_total')}")
         parts.append("临时文件清理：" + result["cleanup"])
-        parts.append("继续处理前请重新进行只读预览。")
+        parts.append("需要 PDF 可先导出；开始下一批处理前再进行只读预览。" if export_ready else "继续处理前请重新进行只读预览。")
         self._set_text(self.report, "\n".join(parts))
         if result["status"] == "completed":
             if result["cleanup"] == "完成":
-                detail = f"金额核对通过（本批合计 ¥{result['total']}），临时文件已清理。可查看工作簿，或点击“导出 PDF”。"
-                self._complete_stage("success", "执行处理完成", detail, notify=True, reason=popup_notice)
+                detail = f"金额核对通过（本批合计 ¥{result['total']}），临时文件已清理。" + ("可查看工作簿，或点击“导出 PDF”。" if export_ready else "可查看工作簿；PDF 导出暂不可用，原因见检查报告。")
+                self._complete_stage("success" if export_ready else "warning", "执行处理完成" if export_ready else "执行处理完成，PDF 导出暂不可用", detail,
+                                     notify=True, reason="\n\n".join(filter(None, (result.get("_pdf_export_blocked"), popup_notice))))
             else:
-                self._complete_stage("warning", "处理完成，临时文件清理未完成", "填表和金额核对已完成；请查看下方清理原因。继续处理前请重新预览。", notify=True, reason="\n\n".join(filter(None, (result["cleanup"], popup_notice))))
+                detail = "填表和金额核对已完成；请查看下方清理原因。" + ("需要 PDF 可先导出；开始下一批处理前再重新预览。" if export_ready else "PDF 导出暂不可用，原因见检查报告。")
+                self._complete_stage("warning", "处理完成，临时文件清理未完成", detail, notify=True,
+                                     reason="\n\n".join(filter(None, (result["cleanup"], result.get("_pdf_export_blocked"), popup_notice))))
         elif result["status"] == "no_change":
             self._complete_stage("success", "执行阶段结束，无需处理", "未改动文件；继续处理前请重新进行只读预览。", notify=True, reason=popup_notice)
         else:
@@ -765,10 +829,16 @@ class App:
     def _export_pdf(self):
         if self.busy:
             return
+        export_issue = self._refresh_pdf_export_receipt()
+        if not self._can_export_pdf():
+            messagebox.showinfo("请先完成执行处理", export_issue or "本次只读预览、执行处理并通过金额核对后，才能导出 PDF。", parent=self.root)
+            return
+        receipt = self._pdf_export_receipt
         try:
-            workbook = Path(self.book.get().strip()).resolve()
+            workbook = Path(receipt["workbook"])
             if workbook.suffix.lower() != ".xlsx" or not workbook.is_file():
-                raise ValueError("请先选择已有的 .xlsx 工作簿")
+                self._pdf_export_receipt = None
+                raise ValueError("本次处理完成的工作簿已不可用，请重新预览并执行处理")
             directory = choose_export_directory(self.root, workbook)
             if not directory:
                 return
@@ -779,23 +849,33 @@ class App:
         existing = [str(Path(directory) / name) for name, digest in approved.items() if digest is not None]
         if existing and not messagebox.askyesno("确认替换已有 PDF", "以下文件已存在：\n\n" + "\n".join(existing) + "\n\n两份 PDF 都生成成功后才会替换。是否继续？", default="no", parent=self.root):
             return
+        export_issue = self._refresh_pdf_export_receipt()
+        if self._pdf_export_receipt is not receipt or not self._can_export_pdf():
+            messagebox.showwarning("处理状态已变化", export_issue or "请重新预览并执行处理，完成后再导出 PDF。", parent=self.root)
+            return
         current_report = self.report.get("1.0", "end-1c")
         if current_report != self._last_pdf_report:
             self._pdf_report_base = current_report
         self._execute_before_export = str(self.execute.cget("state"))
         self._correction_hint_before_export = self._correction_hint_enabled
-        self._run(lambda: export_workbook_pdfs(workbook, directory, approved, progress=lambda msg: self.events.put(("progress", msg))),
+        self._run(lambda: export_workbook_pdfs(workbook, directory, approved, expected_workbook_sha256=receipt["sha256"],
+                                              progress=lambda msg: self.events.put(("progress", msg))),
                   self._render_pdf_result, stage="export")
 
     def _render_pdf_result(self, result):
+        export_issue = self._refresh_pdf_export_receipt()
+        if result.get("requires_processing"):
+            self._pdf_export_receipt = None
         completed = result["status"] == "completed"
-        parts = ["PDF 导出完成" if completed else "PDF 导出未完成", "读取工作簿已保存内容；原工作簿及当前预览未改动。"]
+        parts = ["PDF 导出完成" if completed else "PDF 导出未完成", "本次导出未修改工作簿；原检查报告保留在下方。"]
         if result.get("workbook"):
             parts.append("工作簿：" + result["workbook"])
         for item in result.get("files", []):
             parts.append(f"{item['sheet']}：{item['path']}（{item['pages']} 页）")
         if result.get("error"):
             parts.append("原因：" + result["error"])
+        if export_issue:
+            parts.append(export_issue)
         parts.append("临时文件清理：" + result["cleanup"])
         if self._pdf_report_base:
             parts.append("此前检查报告：\n" + self._pdf_report_base)
@@ -805,16 +885,21 @@ class App:
         if completed:
             self.last_pdf_output_dir = result["output_dir"]
             detail = "两份 PDF 已保存；A4 横向、所有列一页宽，明细向下自动分页。可点击“打开导出目录”查看。"
-            tone = "success" if result["cleanup"] == "完成" else "warning"
+            tone = "success" if result["cleanup"] == "完成" and not export_issue else "warning"
             reason = "\n".join(f"{item['path']}（{item['pages']} 页）" for item in result["files"])
             if tone == "warning":
-                reason += "\n\n临时文件清理：" + result["cleanup"]
-            self._complete_stage(tone, "PDF 导出完成" if tone == "success" else "PDF 已导出，临时文件待清理", detail, notify=True, reason=reason)
+                if result["cleanup"] != "完成":
+                    reason += "\n\n临时文件清理：" + result["cleanup"]
+                if export_issue:
+                    reason += "\n\n" + export_issue
+            title = "PDF 导出完成" if tone == "success" else "PDF 已导出，后续需重新处理" if export_issue else "PDF 已导出，临时文件待清理"
+            self._complete_stage(tone, title, detail, notify=True, reason=reason)
         else:
             reason = result.get("error", "请查看检查报告")
             if result["cleanup"] != "完成":
                 reason += "\n\n" + result["cleanup"]
-            self._complete_stage("error", "PDF 导出未完成", "当前预览及校正已保留；解决下方原因后可重新导出。", notify=True, reason=reason)
+            detail = export_issue or ("工作簿已变化，请重新预览并执行处理后再导出。" if result.get("requires_processing") else "本次处理报告已保留；解决下方原因后可重试导出。")
+            self._complete_stage("error", "PDF 导出未完成", detail, notify=True, reason=reason)
 
     def _sync(self):
         source = self.source.get().strip()
