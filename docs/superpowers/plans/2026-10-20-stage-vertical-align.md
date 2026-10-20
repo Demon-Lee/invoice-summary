@@ -16,8 +16,8 @@
 
 ## Steps
 
-- [ ] 保存旧EXE、规则、skill、engine与受保护源文件基线。
-- [ ] ui.py设置stage_card.rowconfigure(0, weight=1)，stage_heading使用anchor=w、justify=left、sticky=nsew；版本与说明更新1.1.16。
-- [ ] 14模块纯语法编译、引用／diff检查及独立只读复审；构建退出0，核对编译归档、资源、规则及受保护源文件。
+- [x] 保存旧EXE、规则、skill、engine与受保护源文件基线。
+- [x] ui.py设置stage_card.rowconfigure(0, weight=1)，stage_heading使用anchor=w、justify=left、sticky=nsew；版本与说明更新1.1.16。
+- [x] 14模块纯语法编译、引用／diff检查及独立只读复审；构建退出0，核对编译归档、资源、规则及受保护源文件。
 - [ ] 暂存逐文件哈希核对；确认用户已关闭旧版，检查绝对路径和重解析点，归档1.1.15并替换原目录。
 - [ ] 提交实现和发布记录，生成两类ZIP并逐成员核对；记录提交后重包，工作区干净。
