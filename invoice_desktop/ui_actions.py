@@ -16,6 +16,9 @@ LOCATION_ROLES = ("OpenInvoices", "OpenWorkbook", "OpenExport")
 for _role in LOCATION_ROLES:
     ROLES[_role] = {"fill": "#ffffff", "hover": "#eaf2ff", "pressed": "#dce8fa",
                     "border": "#a5b9d8", "hover_border": "#5787ce", "ink": "#24589d"}
+INPUT_ROLES = ("ChooseFolder", "ChooseWorkbook")
+for _role in INPUT_ROLES:
+    ROLES[_role] = dict(ROLES["Execute"])
 DISABLED_INK = "#8a97aa"
 
 
@@ -44,7 +47,7 @@ def _surface_image(colors, state, focused, scale, background):
 def _icon_image(role, color, scale):
     factor = 4
     unit = scale * factor
-    location = role in LOCATION_ROLES
+    location = role in LOCATION_ROLES + INPUT_ROLES
     canvas = (29, 22) if location else (25, 18)
     image = Image.new("RGBA", tuple(round(value * unit) for value in canvas))
     draw = ImageDraw.Draw(image)
@@ -60,15 +63,15 @@ def _icon_image(role, color, scale):
         draw.line(points((11, 2, 11, 6, 15, 6)), fill=color, width=width)
         draw.line(points((15, 10, 15, 16)), fill=color, width=width)
         draw.line(points((12, 13, 15, 16, 18, 13)), fill=color, width=width)
-    elif role == "OpenWorkbook":
+    elif role in ("OpenWorkbook", "ChooseWorkbook"):
         draw.rounded_rectangle(points((3, 2, 20, 20)), radius=round(2 * unit), outline=color, width=width)
         draw.rectangle(points((4, 3, 19, 7)), fill=color)
         draw.line(points((4, 11, 19, 11)), fill=color, width=width)
         draw.line(points((4, 15, 19, 15)), fill=color, width=width)
         draw.line(points((10, 8, 10, 19)), fill=color, width=width)
-    elif role in ("OpenInvoices", "OpenExport"):
+    elif role in ("OpenInvoices", "OpenExport", "ChooseFolder"):
         draw.polygon([points(p) for p in ((2, 6), (2, 3), (10, 3), (13, 6), (22, 6), (22, 19), (2, 19))], outline=color, width=width)
-        if role == "OpenInvoices":
+        if role in ("OpenInvoices", "ChooseFolder"):
             draw.line(points((6, 10, 17, 10)), fill=color, width=width)
             draw.line(points((6, 14, 14, 14)), fill=color, width=width)
         else:
@@ -93,7 +96,7 @@ def configure_action_styles(root, style, *, font, background):
                                ("disabled", False), ("normal", True), ("hover", True),
                                ("pressed", True)):
             images[state, focused] = ImageTk.PhotoImage(
-                _surface_image(colors, state, focused, scale, "#ffffff" if role in LOCATION_ROLES else background), master=root)
+                _surface_image(colors, state, focused, scale, "#ffffff" if role in LOCATION_ROLES + INPUT_ROLES else background), master=root)
         root._action_images[role] = images
         edge = round(12 * scale)
         style.element_create(element, "image", images["normal", False],
@@ -112,7 +115,7 @@ def configure_action_styles(root, style, *, font, background):
                 ("Button.label", {"sticky": "nswe"}),
             ]}),
         ]})])
-        compact = role in LOCATION_ROLES
+        compact = role in LOCATION_ROLES + INPUT_ROLES
         style.configure(name, font=(font, 9 if compact else 10, "bold"),
                         foreground=colors["ink"], anchor="center", width=0,
                         padding=(round((12 if compact else 16) * scale), round((6 if compact else 9) * scale)),

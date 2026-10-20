@@ -17,13 +17,13 @@
 
 ## Task 1：界面与输入状态
 
-- [ ] 保存旧EXE、规则、skill、engine和受保护业务源文件基线。
-- [ ] ui.py将STAGES简化为三色；删除draw_stage_icon及stage_body／stage_badge／stage_icon控件，stage_heading单列居中并按实际宽度换行。内部阶段详情仍供既有流程保存，不显示小字。
-- [ ] ui_actions.py新增ChooseFolder／ChooseWorkbook蓝色角色，复用文件夹／表格图标；ui.py改为左按钮右路径框，创建input_buttons与input_entries引用，输入控件不进入通用interactive列表。
-- [ ] app.py新增_inputs_locked、_choosing_input、_input_change_approved和输入控件状态缓存；_update_input_controls统一控制忙态、禁用路径和按钮角色，挂入_update_action_styles；_button增加默认register=True参数。
-- [ ] _choose_input先确认、再选择，只有不同非空路径才修改StringVar；取消／原路径保留资格和校正，真实改选避免第二次校正提示；_pick_pdf／_pick_book复用该方法。预览、后台运行、定时来源检查和关闭入口避开输入窗口。
-- [ ] _invalidate解除路径锁；_render_preview按clean且has_changes设置锁定；_render_result在completed时保持锁定、no_change解锁；_render_pdf_result仅成功后解锁。去掉旧阶段badge刷新引用。
-- [ ] 更新版本及当前说明为1.1.15，记录状态／改选语义；14模块纯语法编译、引用及diff检查，独立只读复审后修正实际问题。
+- [x] 保存旧EXE、规则、skill、engine和受保护业务源文件基线。
+- [x] ui.py将STAGES简化为三色；删除draw_stage_icon及stage_body／stage_badge／stage_icon控件，stage_heading单列居中并按实际宽度换行。内部阶段详情仍供既有流程保存，不显示小字。
+- [x] ui_actions.py新增ChooseFolder／ChooseWorkbook蓝色角色，复用文件夹／表格图标；ui.py改为左按钮右路径框，创建input_buttons与input_entries引用，输入控件不进入通用interactive列表。
+- [x] app.py新增_inputs_locked、_choosing_input、_input_change_approved和输入控件状态缓存；_update_input_controls统一控制忙态、禁用路径和按钮角色，挂入_update_action_styles；_button增加默认register=True参数。
+- [x] _choose_input先确认、再选择，只有不同非空路径才修改StringVar；取消／原路径保留资格和校正，真实改选避免第二次校正提示；_pick_pdf／_pick_book复用该方法。预览、后台运行、定时来源检查和关闭入口避开输入窗口。
+- [x] _invalidate解除路径锁；_render_preview按clean且has_changes设置锁定；_render_result在completed时保持锁定、no_change解锁；_render_pdf_result仅成功后解锁。完成资格失效、_show_stale_preview及通用错误的失效预览分支均解锁；去掉旧阶段badge刷新引用。
+- [x] 更新版本及当前说明为1.1.15，记录状态／改选语义；14模块纯语法编译、引用及diff检查，独立只读复审后修正实际问题。
 
 ## Task 2：构建与本地发布
 

@@ -16,6 +16,7 @@ from .updates import EngineStore, export_update, read_manifest, SharedInterfaceI
 from .corrections import FIELDS, LABELS, field_value, normalize
 from .policy import BOUNDARY_GUIDE, RETAINED_FEATURES, describe_changes
 from .ui import FONT, PALETTE, build_interface, set_stage_style, surface, text_widget, skipped_pdf_notice
+from .ui_actions import decorate_action_button
 from .pdf_export import export_workbook_pdfs, output_fingerprints
 from .pdf_export_ui import choose_export_directory
 
@@ -73,6 +74,12 @@ class App:
         self._last_pdf_report = None
         self._pdf_report_base = ""
         self.interactive = []
+        self.input_buttons = []
+        self.input_entries = []
+        self._inputs_locked = False
+        self._choosing_input = False
+        self._input_change_approved = False
+        self._input_control_state = None
         self.pdf = tk.StringVar()
         self.book = tk.StringVar()
         self.status = tk.StringVar(value="选择文件，然后进行只读预览")
@@ -105,9 +112,10 @@ class App:
         self.root.after(100, self._poll)
         self.root.after(3000, self._periodic_source)
 
-    def _button(self, parent, label, action, *, style="Secondary.TButton"):
+    def _button(self, parent, label, action, *, style="Secondary.TButton", register=True):
         widget = ttk.Button(parent, text=label, command=action, style=style)
-        self.interactive.append(widget)
+        if register:
+            self.interactive.append(widget)
         return widget
 
     def _build(self):
@@ -199,9 +207,23 @@ class App:
         except Exception:
             reason = "共享规则版本暂无法确认，请解决规则问题后重新预览并执行处理。"
         self._pdf_export_receipt = None
+        self._inputs_locked = False
         return reason
 
+    def _update_input_controls(self):
+        state = (self.busy, self._choosing_input, self._inputs_locked)
+        if state == self._input_control_state:
+            return
+        self._input_control_state = state
+        unavailable = self.busy or self._choosing_input
+        for widget in self.input_entries:
+            widget.configure(state="disabled" if unavailable or self._inputs_locked else "normal")
+        for widget, normal_role, locked_role in self.input_buttons:
+            decorate_action_button(widget, locked_role if self._inputs_locked else normal_role)
+            widget.configure(state="disabled" if unavailable else "normal", cursor="arrow" if unavailable else "hand2")
+
     def _update_action_styles(self):
+        self._update_input_controls()
         execute_primary = not self.busy and str(self.execute.cget("state")) == "normal"
         stage = self.operation_stage if self.busy else None
         preview = self.preview_result
@@ -240,10 +262,6 @@ class App:
                 "处理已完成，可导出 PDF" if export_enabled else "先预览并执行成功，再导出 PDF")
         if self.action_hint.cget("text") != hint:
             self.action_hint.configure(text=hint)
-        if getattr(self, "stage_tone", None) == "success":
-            badge = "可以执行" if execute_primary else "阶段完成"
-            if self.stage_badge.cget("text") != badge:
-                self.stage_badge.configure(text=badge)
 
     def _update_metrics(self, payload=None, total=None, corrections=None):
         if payload is None:
@@ -270,15 +288,38 @@ class App:
             message = detail + ("\n\n" + reason if reason else "")
             show(title, message, parent=self.root)
 
+    def _choose_input(self, variable, choose):
+        if self.busy or self._choosing_input:
+            return
+        self._choosing_input = True
+        self._update_input_controls()
+        try:
+            if self.preview_result or self._pdf_export_receipt or self._inputs_locked:
+                if not messagebox.askyesno("确认重新选择", "更换后将清除当前预览、人工校正和 PDF 导出资格，须重新预览并执行。\n\n此前已处理的文件会保留。是否继续选择？", default="no", parent=self.root):
+                    return
+            value = choose()
+            current = variable.get()
+            same_path = value == current
+            if value and current and not same_path:
+                try:
+                    same_path = Path(value).resolve() == Path(current).resolve()
+                except (OSError, ValueError):
+                    pass
+            if value and not same_path:
+                self._input_change_approved = True
+                try:
+                    variable.set(value)
+                finally:
+                    self._input_change_approved = False
+        finally:
+            self._choosing_input = False
+            self._update_input_controls()
+
     def _pick_pdf(self):
-        value = filedialog.askdirectory(title="选择完整批次的发票 PDF 文件夹")
-        if value and value != self.pdf.get():
-            self.pdf.set(value)
+        self._choose_input(self.pdf, lambda: filedialog.askdirectory(title="选择完整批次的发票 PDF 文件夹", parent=self.root))
 
     def _pick_book(self):
-        value = filedialog.askopenfilename(title="选择要原位更新的工作簿", filetypes=[("Excel 工作簿", "*.xlsx")])
-        if value and value != self.book.get():
-            self.book.set(value)
+        self._choose_input(self.book, lambda: filedialog.askopenfilename(title="选择要原位更新的工作簿", filetypes=[("Excel 工作簿", "*.xlsx")], parent=self.root))
 
     def _pick_source(self):
         value = filedialog.askdirectory(title="选择包含 SKILL.md 和 scripts 的 skill 文件夹")
@@ -288,7 +329,7 @@ class App:
     def _invalidate(self, *_):
         if self._restoring_inputs:
             return
-        if _ and self.preview_result and self.preview_result.corrections:
+        if _ and not self._input_change_approved and self.preview_result and self.preview_result.corrections:
             inputs = (self.pdf.get(), self.book.get())
             if inputs == self._preview_input_text:
                 return
@@ -302,6 +343,7 @@ class App:
                 return
         self.preview_result = None
         self._pdf_export_receipt = None
+        self._inputs_locked = False
         self._update_preview_button()
         self._update_metrics()
         self.execute.configure(state="disabled")
@@ -388,6 +430,7 @@ class App:
         return None
 
     def _show_stale_preview(self, reason, *, notify=False):
+        self._inputs_locked = False
         self.execute.configure(state="disabled")
         self._correction_hint_enabled = False
         self._complete_stage("warning", "原预览已失效", "原校正保留供核对；请重新预览，确认后才会清除原校正。", notify=notify, reason=reason)
@@ -397,7 +440,7 @@ class App:
             self._set_text(self.report, heading + original)
 
     def _periodic_source(self):
-        if not self.busy and not self._confirming_discard:
+        if not self.busy and not self._confirming_discard and not self._choosing_input:
             export_issue = self._refresh_pdf_export_receipt()
             previous_issue = self.source_issue
             problem = self._check_source()
@@ -416,7 +459,7 @@ class App:
         self._check_source()
 
     def _run(self, work, done, *, stage=None):
-        if self.busy:
+        if self.busy or self._choosing_input:
             return
         if stage in ("preview", "correction", "execute"):
             self._pdf_export_receipt = None
@@ -479,6 +522,7 @@ class App:
                         if not completed_export_ready:
                             self._invalidate()
                     else:
+                        self._inputs_locked = False
                         self.execute.configure(state="disabled")
                         self._correction_hint_enabled = False
                     note = "\n原预览和已保存校正已保留；本次失败的修改未保存。" if retained else ""
@@ -503,6 +547,8 @@ class App:
         self.root.after(100, self._poll)
 
     def _preview(self):
+        if self.busy or self._choosing_input:
+            return
         problem = self._check_source()
         if problem:
             self._show_source_problem(problem, notify=True)
@@ -517,6 +563,7 @@ class App:
 
     def _render_preview(self, preview, *, notify=False, phase=None):
         self.preview_result = preview
+        self._inputs_locked = bool(preview.clean and preview.has_changes)
         self._preview_input_text = (self.pdf.get(), self.book.get())
         self._update_preview_button(preview)
         self._render_table(preview.payload, corrections=preview.corrections)
@@ -706,6 +753,8 @@ class App:
 
     def _render_result(self, result):
         self.last_result = result
+        if result["status"] in ("completed", "no_change"):
+            self._inputs_locked = result["status"] == "completed"
         self._pdf_export_receipt = result.get("_pdf_export_receipt") if result["status"] == "completed" else None
         export_issue = self._refresh_pdf_export_receipt()
         if export_issue:
@@ -802,6 +851,8 @@ class App:
         if result.get("requires_processing"):
             self._pdf_export_receipt = None
         completed = result["status"] == "completed"
+        if completed:
+            self._inputs_locked = False
         parts = ["PDF 导出完成" if completed else "PDF 导出未完成", "本次导出未修改工作簿；原检查报告保留在下方。"]
         if result.get("workbook"):
             parts.append("工作簿：" + result["workbook"])
@@ -941,6 +992,8 @@ class App:
             messagebox.showinfo("无法打开", str(exc))
 
     def _close(self):
+        if self._choosing_input:
+            return
         if self.busy:
             messagebox.showinfo("正在运行", "当前操作结束后再关闭软件，结果会显示在窗口中。")
             return

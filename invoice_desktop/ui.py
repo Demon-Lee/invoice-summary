@@ -14,11 +14,11 @@ PALETTE = {
     "blue": "#2563eb", "blue_hover": "#1e54cb", "selected": "#e3edff",
 }
 STAGES = {
-    "idle": ("#f3f5f9", "#586a83", "#d8e0eb", "等待预览"),
-    "working": ("#eef4ff", "#23509d", "#d4e1fa", "正在处理"),
-    "success": ("#f0f9f4", "#22674c", "#cce4d8", "阶段完成"),
-    "warning": ("#fff8e9", "#8a601e", "#ecdbb4", "需要处理"),
-    "error": ("#fff0ee", "#a13d36", "#efd1cb", "未完成"),
+    "idle": ("#f3f5f9", "#586a83", "#d8e0eb"),
+    "working": ("#eef4ff", "#23509d", "#d4e1fa"),
+    "success": ("#f0f9f4", "#22674c", "#cce4d8"),
+    "warning": ("#fff8e9", "#8a601e", "#ecdbb4"),
+    "error": ("#fff0ee", "#a13d36", "#efd1cb"),
 }
 
 
@@ -129,33 +129,11 @@ def skipped_pdf_notice(payload, *, limit=None):
     return "\n".join(lines)
 
 
-def draw_stage_icon(canvas, tone, background, foreground):
-    canvas.configure(bg=background)
-    canvas.delete("all")
-    canvas.create_oval(2, 2, 30, 30, outline=foreground, width=1)
-    if tone == "success":
-        canvas.create_line(9, 16, 14, 21, 24, 10, fill=foreground, width=2)
-    elif tone in ("warning", "error"):
-        if tone == "warning":
-            canvas.create_line(16, 8, 16, 19, fill=foreground, width=2)
-            canvas.create_oval(15, 23, 17, 25, fill=foreground, outline=foreground)
-        else:
-            canvas.create_line(10, 10, 22, 22, fill=foreground, width=2)
-            canvas.create_line(22, 10, 10, 22, fill=foreground, width=2)
-    else:
-        canvas.create_line(16, 8, 16, 16, 22, 19, fill=foreground, width=2)
-
-
 def set_stage_style(app, tone):
     app.stage_tone = tone
-    background, foreground, border, badge = STAGES[tone]
+    background, foreground, border = STAGES[tone]
     app.stage_card.configure(bg=background, highlightbackground=border, highlightcolor=border)
-    for label in (app.stage_heading, app.stage_body, app.stage_badge):
-        label.configure(bg=background, fg=foreground)
-    if tone == "success" and not app.busy and str(app.execute.cget("state")) == "normal":
-        badge = "可以执行"
-    app.stage_badge.configure(text=badge)
-    draw_stage_icon(app.stage_icon, tone, background, foreground)
+    app.stage_heading.configure(bg=background, fg=foreground)
 
 
 def guide_card(parent, column, title, items, *, numbered=False):
@@ -211,15 +189,17 @@ def build_interface(app, *, execution_steps, necessary_conditions, boundary_guid
     files = surface(process, padding=9)
     files.grid(row=1, column=0, sticky="ew", pady=(0, 7))
     files.columnconfigure(1, weight=1)
-    for row, label, variable, action, button_name in (
-        (0, "PDF 文件夹", app.pdf, app._pick_pdf, "选择文件夹"),
-        (1, "目标工作簿", app.book, app._pick_book, "选择工作簿"),
+    for row, label, variable, action, normal_role, locked_role in (
+        (0, "选择 PDF 文件夹", app.pdf, app._pick_pdf, "ChooseFolder", "OpenInvoices"),
+        (1, "选择目标工作簿", app.book, app._pick_book, "ChooseWorkbook", "OpenWorkbook"),
     ):
-        ttk.Label(files, text=label, style="Surface.TLabel").grid(row=row, column=0, sticky="w", padx=(0, 12), pady=3)
+        button = app._button(files, label, action, register=False)
+        decorate_action_button(button, normal_role)
+        button.grid(row=row, column=0, sticky="ew", padx=(0, 12), pady=3)
+        app.input_buttons.append((button, normal_role, locked_role))
         entry = ttk.Entry(files, textvariable=variable)
         entry.grid(row=row, column=1, sticky="ew", pady=3)
-        app.interactive.append(entry)
-        app._button(files, button_name, action).grid(row=row, column=2, padx=(10, 0), pady=3)
+        app.input_entries.append(entry)
     actions = ttk.Frame(process)
     actions.grid(row=2, column=0, sticky="ew", pady=(0, 7))
     action_buttons = ttk.Frame(actions)
@@ -273,18 +253,12 @@ def build_interface(app, *, execution_steps, necessary_conditions, boundary_guid
                         sticky="ew", padx=(0, 8), pady=(0, 0 if single_row else 4))
     locations.bind("<Configure>", layout_locations)
     layout_locations()
-    app.stage_card = surface(process, padding=9)
+    app.stage_card = surface(process, padding=12)
     app.stage_card.grid(row=3, column=0, sticky="ew", pady=(0, 7))
-    app.stage_card.columnconfigure(1, weight=1)
-    app.stage_icon = tk.Canvas(app.stage_card, width=32, height=32, highlightthickness=0)
-    app.stage_icon.grid(row=0, column=0, rowspan=2, padx=(0, 10))
-    app.stage_heading = tk.Label(app.stage_card, textvariable=app.stage_title, font=(FONT, 12, "bold"), anchor="w", justify="left")
-    app.stage_heading.grid(row=0, column=1, sticky="ew")
-    app.stage_body = tk.Label(app.stage_card, textvariable=app.stage_detail, font=(FONT, 9), anchor="w", justify="left", wraplength=950)
-    app.stage_body.grid(row=1, column=1, sticky="ew", pady=(2, 0))
-    app.stage_badge = tk.Label(app.stage_card, font=(FONT, 9), padx=8, pady=3)
-    app.stage_badge.grid(row=0, column=2, rowspan=2, padx=(12, 0))
-    app.stage_card.bind("<Configure>", lambda event: [label.configure(wraplength=max(180, event.width - 180)) for label in (app.stage_heading, app.stage_body)])
+    app.stage_card.columnconfigure(0, weight=1)
+    app.stage_heading = tk.Label(app.stage_card, textvariable=app.stage_title, font=(FONT, 13, "bold"), anchor="center", justify="center", wraplength=1000)
+    app.stage_heading.grid(row=0, column=0, sticky="ew")
+    app.stage_card.bind("<Configure>", lambda event: app.stage_heading.configure(wraplength=max(180, event.width - 28)))
     app._set_stage("idle", app.stage_title.get(), app.stage_detail.get())
     metrics = ttk.Frame(process)
     metrics.grid(row=4, column=0, sticky="ew", pady=(0, 7))
