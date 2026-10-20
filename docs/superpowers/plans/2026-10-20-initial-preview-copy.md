@@ -16,8 +16,8 @@
 
 ## Steps
 
-- [ ] 保存EXE、规则、skill、engine及受保护源文件基线。
-- [ ] app.py初始化_has_previewed=False，_render_preview置True，_invalidate按标志选择等待／重新预览标题与底部状态；ui.py删除副标题及action_hint，app.py删除提示刷新及无用局部变量。
-- [ ] 版本与说明更新1.1.17，14模块纯语法编译、引用／差异范围核对、独立只读复审及构建完整性通过。
+- [x] 保存EXE、规则、skill、engine及受保护源文件基线。
+- [x] app.py初始化_has_previewed=False，_render_preview置True，_invalidate按标志选择等待／重新预览标题与底部状态；ui.py删除副标题及action_hint，app.py删除提示刷新及无用局部变量。
+- [x] 版本与说明更新1.1.17，14模块纯语法编译、引用／差异范围核对、独立只读复审及构建完整性通过。
 - [ ] 暂存逐文件核对，确认旧版已关闭，检查绝对路径和重解析点后归档旧目录并更新原路径。
 - [ ] 提交实现及发布记录，生成Windows／源码包并逐成员对应实际文件；最终记录提交后重包，工作区干净。

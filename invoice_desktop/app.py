@@ -59,6 +59,7 @@ class App:
         self.busy = False
         self.operation_stage = None
         self.preview_result = None
+        self._has_previewed = False
         self._correction_hint_enabled = False
         self._correction_hint_state = None
         self._preview_input_text = ("", "")
@@ -224,7 +225,6 @@ class App:
 
     def _update_action_styles(self):
         self._update_input_controls()
-        execute_primary = not self.busy and str(self.execute.cget("state")) == "normal"
         stage = self.operation_stage if self.busy else None
         preview = self.preview_result
         preview_label = "重新预览（清除校正）" if preview and preview.corrections and not preview.resume_pending else "只读预览"
@@ -253,15 +253,6 @@ class App:
             cursor = "arrow" if widget.instate(("disabled",)) else "hand2"
             if str(widget.cget("cursor")) != cursor:
                 widget.configure(cursor=cursor)
-        hint = ("正在预览，请稍候…" if stage == "preview" else
-                "正在处理，请稍候…" if stage == "execute" else
-                "正在检查人工校正，请稍候…" if stage == "correction" else
-                "正在导出 PDF，请稍候…" if stage == "export" else
-                "正在处理，请稍候…" if self.busy else
-                "预览已通过，可以执行处理" if execute_primary else
-                "处理已完成，可导出 PDF" if export_enabled else "先预览并执行成功，再导出 PDF")
-        if self.action_hint.cget("text") != hint:
-            self.action_hint.configure(text=hint)
 
     def _update_metrics(self, payload=None, total=None, corrections=None):
         if payload is None:
@@ -348,8 +339,10 @@ class App:
         self._update_metrics()
         self.execute.configure(state="disabled")
         self._correction_hint_enabled = False
-        self._set_stage("idle", "需要重新预览", "输入或规则已变更；请点击“只读预览”，完成检查后再执行。")
-        self.status.set("需要重新预览")
+        title = "需要重新预览" if self._has_previewed else "等待只读预览"
+        detail = "输入或规则已变更；请点击“只读预览”，完成检查后再执行。" if self._has_previewed else "选择完整批次的 PDF 文件夹和目标工作簿，然后点击“只读预览”。"
+        self._set_stage("idle", title, detail)
+        self.status.set(title)
         self.summary.set("完成新的只读预览后，将显示发票数量、明细数量和金额。")
 
     def _source_changed(self, *_):
@@ -562,6 +555,7 @@ class App:
         self._run(lambda: self.controller.preview(directory, book), lambda preview: self._render_preview(preview, notify=True), stage="preview")
 
     def _render_preview(self, preview, *, notify=False, phase=None):
+        self._has_previewed = True
         self.preview_result = preview
         self._inputs_locked = bool(preview.clean and preview.has_changes)
         self._preview_input_text = (self.pdf.get(), self.book.get())
