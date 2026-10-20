@@ -236,20 +236,48 @@ def build_interface(app, *, execution_steps, necessary_conditions, process_notic
     decorate_action_button(app.execute, "Execute")
     app.execute.pack(side="left", padx=(0, 14))
     app.execute.configure(state="disabled")
-    app.correct_button = app._button(action_buttons, "人工校正", app._edit_detail)
-    decorate_action_button(app.correct_button, "Correct")
-    app.correct_button.pack(side="left")
-    app.correct_button.configure(state="disabled")
     app.pdf_export_button = app._button(action_buttons, "导出 PDF", app._export_pdf)
     decorate_action_button(app.pdf_export_button, "Export")
-    app.pdf_export_button.pack(side="left", padx=(14, 0))
+    app.pdf_export_button.pack(side="left")
     app.pdf_export_button.configure(state="disabled")
-    action_footer = ttk.Frame(actions)
-    action_footer.pack(fill="x", pady=(3, 0))
-    app.action_hint = ttk.Label(action_footer, text="先只读预览，通过后可执行", foreground=PALETTE["muted"], font=(FONT, 9))
-    app.action_hint.pack(side="left", padx=4)
-    app._button(action_footer, "打开工作簿", lambda: app._open(app.book.get()), style="Link.TButton").pack(side="right")
-    app._button(action_footer, "打开发票目录", lambda: app._open(app.pdf.get()), style="Link.TButton").pack(side="right", padx=(0, 4))
+    app.action_hint = ttk.Label(action_buttons, text="先只读预览，通过后可执行", foreground=PALETTE["muted"], font=(FONT, 9), wraplength=340, justify="left")
+    app.action_hint.pack(side="left", padx=(16, 0), fill="x", expand=True)
+    app.action_hint.bind("<Configure>", lambda event: app.action_hint.configure(wraplength=max(100, event.width - 8)))
+    locations = surface(actions, padding=5)
+    locations.pack(fill="x", pady=(6, 0))
+    location_caption = ttk.Label(locations, text="打开位置", style="Surface.TLabel", font=(FONT, 9, "bold"))
+    location_buttons = []
+    for attribute, label, action, role in (
+        ("open_invoice_folder_button", "打开发票目录", lambda: app._open(app.pdf.get()), "OpenInvoices"),
+        ("open_workbook_button", "打开工作簿", lambda: app._open(app.book.get()), "OpenWorkbook"),
+        ("open_pdf_folder_button", "打开导出目录", lambda: app._open(app.last_pdf_output_dir), "OpenExport"),
+    ):
+        button = app._button(locations, label, action)
+        decorate_action_button(button, role)
+        button.configure(state="disabled")
+        location_buttons.append(button)
+        setattr(app, attribute, button)
+    location_layout = None
+    def layout_locations(event=None):
+        nonlocal location_layout
+        available = max(1, locations.winfo_width() - 12)
+        widths = tuple(button.winfo_reqwidth() for button in location_buttons)
+        single_row = location_caption.winfo_reqwidth() + 18 + sum(width + 8 for width in widths) <= available
+        columns = 3 if single_row else max(1, min(3, (available + 8) // (max(widths) + 8)))
+        layout = (single_row, columns, widths)
+        if layout == location_layout:
+            return
+        location_layout = layout
+        for column in range(4):
+            locations.columnconfigure(column, uniform="location-buttons" if not single_row and column < columns else "", weight=0)
+        location_caption.grid(row=0, column=0, columnspan=1 if single_row else columns,
+                              sticky="w", padx=(6, 12), pady=(0, 0 if single_row else 4))
+        for index, button in enumerate(location_buttons):
+            button.grid(row=0 if single_row else 1 + index // columns,
+                        column=index + 1 if single_row else index % columns,
+                        sticky="ew", padx=(0, 8), pady=(0, 0 if single_row else 4))
+    locations.bind("<Configure>", layout_locations)
+    layout_locations()
     app.stage_card = surface(process, padding=9)
     app.stage_card.grid(row=4, column=0, sticky="ew", pady=(0, 7))
     app.stage_card.columnconfigure(1, weight=1)
@@ -282,6 +310,11 @@ def build_interface(app, *, execution_steps, necessary_conditions, process_notic
     table_heading = ttk.Frame(process)
     table_heading.grid(row=6, column=0, sticky="ew", pady=(0, 4))
     ttk.Label(table_heading, text="发票明细", font=(FONT, 11, "bold")).pack(side="left", padx=(0, 10))
+    app.correction_hint = tk.Label(table_heading, text="预览后可双击校正", image=app.root._correction_icons[1],
+                                   compound="left", font=(FONT, 9, "bold"), padx=7, pady=4,
+                                   bg=PALETTE["background"], fg=PALETTE["muted"],
+                                   highlightthickness=1, highlightbackground=PALETTE["line"])
+    app.correction_hint.pack(side="left", padx=(0, 10))
     app.preview_note.set(preview_note)
     note = ttk.Label(table_heading, textvariable=app.preview_note, font=(FONT, 9), foreground=PALETTE["muted"], wraplength=900, justify="left")
     note.pack(side="left", fill="x", expand=True)
@@ -303,6 +336,10 @@ def build_interface(app, *, execution_steps, necessary_conditions, process_notic
     app.tree.tag_configure("odd", background="#f8fafd")
     app.tree.tag_configure("corrected", background="#fff8e5")
     app.tree.bind("<Double-1>", app._edit_detail)
+    def edit_selected(event):
+        app._edit_detail()
+        return "break"
+    app.tree.bind("<Return>", edit_selected)
     app.tree.grid(row=0, column=0, sticky="nsew")
     vertical = AutoHideScrollbar(table, orient="vertical", command=app.tree.yview, end_gap=14)
     horizontal = AutoHideScrollbar(table, orient="horizontal", command=app.tree.xview, end_gap=14)
@@ -316,9 +353,6 @@ def build_interface(app, *, execution_steps, necessary_conditions, process_notic
     app.copy_report_button = app._button(report_heading, "复制报告", app._copy_report, style="Link.TButton")
     app.copy_report_button.pack(side="right")
     app.copy_report_button.configure(state="disabled")
-    app.open_pdf_folder_button = app._button(report_heading, "打开导出目录", lambda: app._open(app.last_pdf_output_dir), style="Link.TButton")
-    app.open_pdf_folder_button.pack(side="right", padx=(0, 8))
-    app.open_pdf_folder_button.configure(state="disabled")
     report_panel = surface(process)
     report_panel.grid(row=9, column=0, sticky="ew")
     app.report = app._text(report_panel, height=3)

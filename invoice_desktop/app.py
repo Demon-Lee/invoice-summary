@@ -32,7 +32,7 @@ NECESSARY_CONDITIONS = (
     "执行前关闭目标工作簿；软件和输入文件所在目录须可写。",
 )
 PROCESS_NOTICE = "执行会重命名 PDF，清空两表主表旧明细（含品牌、备注）后整批重填；保留右侧模板文字；原位更新，不自动备份。"
-PREVIEW_NOTE = "完整批次明细 · 双击一行可人工校正 · 保存校正后会自动重新检查"
+PREVIEW_NOTE = "完整批次明细 · 校正仅更新预览 · 保存后自动重新检查"
 SOURCE_PROBLEMS = {
     "unavailable": ("本机规则来源不可用", "到“规则与更新”重新选择正确的 skill 文件夹；或点击“解除绑定”，继续使用软件已安装的规则。"),
     "invalid_source": ("本机规则内容需要修正", "请维护者检查来源文件和规则声明；新增未支持的策略须先适配软件。也可解除绑定，继续使用已安装的规则。"),
@@ -52,6 +52,8 @@ HELP = "\n".join(("执行步骤", *EXECUTION_STEPS, "", PROCESS_NOTICE, "", "必
 
 检查报告把异常和失败原因放在前面，可通过右侧滚动条查看全文。“复制报告”复制完整报告，便于保存或向维护者反馈问题。
 
+打开发票目录、打开工作簿、打开导出目录集中在操作区下方的“打开位置”，分别使用文件夹、表格、导出文件夹图标。未选择对应路径或尚未成功导出时，对应入口禁用；处理中暂不可打开。
+
 使用新版共享规则时，按内容明确识别出的验收单、领用单等非发票 PDF 会自动跳过，不参与发票编号、改名、填表或金额统计。完成弹窗列出跳过文件，超过八项时完整清单见检查报告。扫描件、损坏文件、类型不明或疑似发票缺字段仍提示异常；目录中没有可处理发票时禁止执行。
 
 导出 PDF
@@ -59,7 +61,7 @@ HELP = "\n".join(("执行步骤", *EXECUTION_STEPS, "", PROCESS_NOTICE, "", "必
 导出读取工作簿已保存的内容；只读预览和人工校正须先执行处理才会写入。导出不重填工作簿，也不保存临时打印设置；不会重新核对发票金额。同名 PDF 经确认才替换，失败时查看原因后重试。PDF 导出由软件维护，skill 同步不会改动此功能。
 
 人工校正
-选中一条预览明细，点击“人工校正”或双击该行。对照原 PDF 校正产品名称、规格型号、单位、数量、含税金额和生产厂家，单价自动计算。保存后重新检查金额、文件名和工作簿映射；通过后才可执行。“恢复识别值”可撤销该行校正。
+预览结束后，明细标题旁突出显示“双击明细，可人工校正”。双击需要修改的明细，或选中后按 Enter。对照原 PDF 校正产品名称、规格型号、单位、数量、含税金额和生产厂家，单价自动计算。保存后重新检查金额、文件名和工作簿映射；通过后才可执行。“恢复识别值”可撤销该行校正。
 
 校正只对本次预览有效，保存时不会改动 PDF、工作簿或 skill。已有校正时，预览按钮会标明“清除校正”；重新预览、更换输入路径、更新规则或关闭软件前会提示清除校正，选择“否”保留原结果。保存校正后已自动检查，不必再次预览。普通操作没有校正时不弹此提醒。未完成执行的校正会随恢复记录保留，恢复期间固定使用该次校正。
 
@@ -114,6 +116,8 @@ class App:
         self.busy = False
         self.operation_stage = None
         self.preview_result = None
+        self._correction_hint_enabled = False
+        self._correction_hint_state = None
         self._preview_input_text = ("", "")
         self._restoring_inputs = False
         self._confirming_discard = False
@@ -224,6 +228,24 @@ class App:
         finally:
             self._confirming_discard = False
 
+    def _update_correction_hint(self):
+        if getattr(self, "correction_hint", None) is None:
+            return
+        preview = self.preview_result
+        active = bool(preview and self._correction_hint_enabled and not preview.resume_pending and not self.busy)
+        label = ("处理中，暂不可校正" if self.busy else
+                 "恢复期间暂不可校正" if preview and preview.resume_pending else
+                 "双击明细，可人工校正" if active else
+                 "当前预览暂不可校正" if preview else "预览后可双击校正")
+        state = (label, active)
+        if state == self._correction_hint_state:
+            return
+        self._correction_hint_state = state
+        self.correction_hint.configure(text=label, bg="#fff2d6" if active else PALETTE["background"],
+                                       fg="#8a5816" if active else PALETTE["muted"],
+                                       highlightbackground="#e6c987" if active else PALETTE["line"],
+                                       image=self.root._correction_icons[0 if active else 1])
+
     def _update_action_styles(self):
         execute_primary = not self.busy and str(self.execute.cget("state")) == "normal"
         stage = self.operation_stage if self.busy else None
@@ -240,11 +262,17 @@ class App:
         export_state = "normal" if export_enabled else "disabled"
         if str(self.pdf_export_button.cget("state")) != export_state:
             self.pdf_export_button.configure(state=export_state)
-        if getattr(self, "open_pdf_folder_button", None) is not None:
-            folder_state = "normal" if self.last_pdf_output_dir and not self.busy else "disabled"
-            if str(self.open_pdf_folder_button.cget("state")) != folder_state:
-                self.open_pdf_folder_button.configure(state=folder_state)
-        for widget in (self.preview_button, self.execute, self.correct_button, self.pdf_export_button):
+        for widget, available in (
+            (self.open_invoice_folder_button, bool(self.pdf.get().strip())),
+            (self.open_workbook_button, bool(self.book.get().strip())),
+            (self.open_pdf_folder_button, bool(self.last_pdf_output_dir)),
+        ):
+            state = "normal" if available and not self.busy else "disabled"
+            if str(widget.cget("state")) != state:
+                widget.configure(state=state)
+        self._update_correction_hint()
+        for widget in (self.preview_button, self.execute, self.pdf_export_button,
+                       self.open_invoice_folder_button, self.open_workbook_button, self.open_pdf_folder_button):
             cursor = "arrow" if widget.instate(("disabled",)) else "hand2"
             if str(widget.cget("cursor")) != cursor:
                 widget.configure(cursor=cursor)
@@ -320,7 +348,7 @@ class App:
         self._update_preview_note()
         self._update_metrics()
         self.execute.configure(state="disabled")
-        self.correct_button.configure(state="disabled")
+        self._correction_hint_enabled = False
         self._set_stage("idle", "需要重新预览", "输入或规则已变更；请点击“只读预览”，完成检查后再执行。")
         self.status.set("需要重新预览")
         self.summary.set("完成新的只读预览后，将显示发票数量、明细数量和金额。")
@@ -358,7 +386,7 @@ class App:
 
     def _show_source_problem(self, problem, *, notify=False):
         self.execute.configure(state="disabled")
-        self.correct_button.configure(state="disabled")
+        self._correction_hint_enabled = False
         key = (problem["kind"], problem["reason"], problem["version"])
         if key != self._shown_source_issue or notify:
             self._complete_stage("warning", problem["title"], problem["next_step"], notify=notify, reason=problem["reason"])
@@ -400,7 +428,7 @@ class App:
 
     def _show_stale_preview(self, reason, *, notify=False):
         self.execute.configure(state="disabled")
-        self.correct_button.configure(state="disabled")
+        self._correction_hint_enabled = False
         self._complete_stage("warning", "原预览已失效", "原校正保留供核对；请重新预览，确认后才会清除原校正。", notify=notify, reason=reason)
         original = self.report.get("1.0", "end-1c")
         heading = f"原预览已失效\n原因：{reason}\n下一步：原校正仅供核对，需重新预览；不能直接重试执行或保存校正。\n\n原报告：\n"
@@ -459,11 +487,12 @@ class App:
                 for widget in self.interactive:
                     widget.configure(state="normal")
                 self.execute.configure(state="disabled")
-                self.correct_button.configure(state="normal" if self.preview_result and not self.preview_result.resume_pending else "disabled")
+                self._correction_hint_enabled = bool(self.preview_result and not self.preview_result.resume_pending
+                                                      and any(record.get("rows") for record in self.preview_result.payload.get("records", [])))
                 self.copy_report_button.configure(state="normal" if self.report.get("1.0", "end-1c") else "disabled")
                 if stage == "export":
                     self.execute.configure(state=self._execute_before_export)
-                    self.correct_button.configure(state=self._correct_before_export)
+                    self._correction_hint_enabled = self._correction_hint_before_export
                     if event[0] == "done":
                         event[1](event[2])
                     else:
@@ -481,7 +510,7 @@ class App:
                         self._invalidate()
                     else:
                         self.execute.configure(state="disabled")
-                        self.correct_button.configure(state="disabled")
+                        self._correction_hint_enabled = False
                     note = "\n原预览和已保存校正已保留；本次失败的修改未保存。" if retained else ""
                     if validity_problem:
                         note += "\n原预览已失效：" + validity_problem + "；原校正仅供核对，须重新预览。"
@@ -517,7 +546,7 @@ class App:
         self._preview_input_text = (self.pdf.get(), self.book.get())
         self._update_preview_note(preview)
         self._render_table(preview.payload, corrections=preview.corrections)
-        self.correct_button.configure(state="normal" if preview.payload.get("records") and not preview.resume_pending else "disabled")
+        self._correction_hint_enabled = bool(any(record.get("rows") for record in preview.payload.get("records", [])) and not preview.resume_pending)
         invoices = len(preview.payload.get("records", []))
         rows = sum(len(r.get("rows", [])) for r in preview.payload.get("records", []))
         self._update_metrics(preview.payload, preview.total, preview.corrections)
@@ -553,7 +582,7 @@ class App:
         if not preview.clean:
             self._complete_stage("warning", f"{phase}完成，发现 {len(preview.issues)} 项异常", "暂不能执行。请查看下方异常，校正字段或解决问题后重新检查。", notify=notify, reason="\n\n".join(filter(None, (preview.issues[0], popup_notice))))
         elif preview.has_changes:
-            next_step = "检测到上次处理未完成，点击“执行处理”继续。" if preview.resume_pending else "文件尚未改动；核对明细后点击“执行处理”。"
+            next_step = "检测到上次处理未完成，点击“执行处理”继续。" if preview.resume_pending else "双击明细可人工校正；核对后点击“执行处理”。文件尚未改动。"
             self._complete_stage("success", f"{phase}完成，预览通过", next_step, notify=notify, reason="\n\n".join(filter(None, (self.summary.get(), popup_notice))))
         else:
             self._complete_stage("success", f"{phase}完成，无需处理", "没有可重填明细；可选择其他批次重新预览。", notify=notify, reason=popup_notice)
@@ -593,6 +622,13 @@ class App:
     def _edit_detail(self, event=None):
         if self.busy:
             return
+        clicked = None
+        if event is not None:
+            if self.tree.identify_region(event.x, event.y) != "cell":
+                return
+            clicked = self.tree.identify_row(event.y)
+            if not clicked:
+                return
         problem = self._check_source()
         if problem:
             self._show_source_problem(problem, notify=True)
@@ -608,12 +644,8 @@ class App:
         if preview.resume_pending:
             messagebox.showinfo("先完成上次处理", "恢复期间固定使用上次保存的校正，请先完成该次运行。")
             return
-        if event is not None:
-            if self.tree.identify_region(event.x, event.y) != "cell":
-                return
-            selected = self.tree.identify_row(event.y)
-            if selected:
-                self.tree.selection_set(selected)
+        if clicked:
+            self.tree.selection_set(clicked)
         selected = self.tree.selection()
         if not selected:
             messagebox.showinfo("选择明细", "请先选中一条需要校正的明细。")
@@ -689,7 +721,7 @@ class App:
         self.last_result = result
         self.preview_result = None
         self._update_preview_note()
-        self.correct_button.configure(state="disabled")
+        self._correction_hint_enabled = False
         self._render_table(result["payload"], result.get("rename_plan"), result.get("corrections"))
         self._update_metrics(result["payload"], result.get("total"), result.get("corrections"))
         outcome = "处理完成，逐分金额验证通过。" if result["status"] == "completed" else "无需处理，未改动文件。" if result["status"] == "no_change" else "处理未完成。"
@@ -751,7 +783,7 @@ class App:
         if current_report != self._last_pdf_report:
             self._pdf_report_base = current_report
         self._execute_before_export = str(self.execute.cget("state"))
-        self._correct_before_export = str(self.correct_button.cget("state"))
+        self._correction_hint_before_export = self._correction_hint_enabled
         self._run(lambda: export_workbook_pdfs(workbook, directory, approved, progress=lambda msg: self.events.put(("progress", msg))),
                   self._render_pdf_result, stage="export")
 
