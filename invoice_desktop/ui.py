@@ -53,53 +53,11 @@ def configure_theme(root):
         style.map(f"{name}.TButton", background=[("disabled", "#f0f3f7"), ("pressed", "#dbe6fa" if name != "Primary" else "#194bb7"), ("active", "#edf3ff" if name != "Primary" else PALETTE["blue_hover"])], foreground=[("disabled", "#9aa5b5")], bordercolor=[("disabled", "#e0e6ee")])
     style.configure("TEntry", fieldbackground="#fafbfd", foreground="#53637b", bordercolor="#d9e1eb", lightcolor="#d9e1eb", darkcolor="#d9e1eb", padding=(8, 5))
     style.map("TEntry", bordercolor=[("focus", "#8caff7")], fieldbackground=[("disabled", "#f0f3f7")])
-    configure_navigation(root, style)
     configure_action_styles(root, style, font=FONT, background=PALETTE["background"])
     style.configure("Treeview", rowheight=30, font=(FONT, 9), background=PALETTE["surface"], fieldbackground=PALETTE["surface"], foreground="#445570", borderwidth=0)
     style.configure("Treeview.Heading", font=(FONT, 9, "bold"), padding=(8, 6), background="#f2f5f9", foreground="#53647c", borderwidth=0, relief="flat")
     style.map("Treeview", background=[("selected", PALETTE["selected"])], foreground=[("selected", "#17315c")])
     style.map("Treeview.Heading", background=[("active", "#e8edf5")])
-
-
-def configure_navigation(root, style):
-    """Replace the themed tab border with a white surface and fixed bottom line."""
-    element = "InvoiceNavigation.tab"
-    if element not in style.element_names():
-        images = {}
-        for state, background, selected in (
-            ("normal", PALETTE["surface"], False),
-            ("selected", PALETTE["surface"], True),
-            ("active", "#f4f7fc", False),
-            ("selected_active", "#f4f7fc", True),
-        ):
-            image = tk.PhotoImage(master=root, width=2, height=8)
-            image.put(background, to=(0, 0, 2, 8))
-            if selected:
-                image.put(PALETTE["blue"], to=(0, 5, 2, 8))
-            images[state] = image
-        # Tk style stores image names; Python must keep the actual images alive.
-        root._navigation_images = images
-        style.element_create(element, "image", images["normal"],
-                             ("selected", "active", images["selected_active"]),
-                             ("selected", images["selected"]), ("active", images["active"]),
-                             border=(0, 0, 0, 3), padding=(0, 0, 0, 3), sticky="nswe")
-    style.configure("Underline.TNotebook", background=PALETTE["surface"], borderwidth=0,
-                    bordercolor=PALETTE["surface"], lightcolor=PALETTE["surface"],
-                    darkcolor=PALETTE["surface"], tabmargins=(18, 0, 18, 0))
-    style.configure("Underline.TNotebook.Tab", background=PALETTE["surface"], foreground="#62718a",
-                    font=(FONT, 9), padding=(14, 8, 14, 8), expand=(0, 0, 0, 0),
-                    focusthickness=1, focuscolor="#93b4ff")
-    style.map("Underline.TNotebook.Tab", foreground=[("disabled", "#9aa5b5"), ("selected", PALETTE["blue"])],
-              font=[("selected", (FONT, 9, "bold"))],
-              padding=[("selected", (14, 8, 14, 8))], expand=[("selected", (0, 0, 0, 0))])
-    style.layout("Underline.TNotebook", [("Notebook.client", {"sticky": "nswe"})])
-    style.layout("Underline.TNotebook.Tab", [(element, {"sticky": "nswe", "children": [
-        ("Notebook.padding", {"sticky": "nswe", "children": [
-            ("Notebook.focus", {"sticky": "nswe", "children": [
-                ("Notebook.label", {"sticky": "nswe"}),
-            ]}),
-        ]}),
-    ]})])
 
 
 def surface(parent, *, background=None, padding=0):
@@ -152,7 +110,7 @@ def guide_card(parent, column, title, items, *, numbered=False):
     return card
 
 
-def build_interface(app, *, execution_steps, necessary_conditions, boundary_guide, retained_features):
+def build_interface(app, *, execution_steps, necessary_conditions):
     root = app.root
     root.title(f"发票汇总助手 V{__version__}")
     root.geometry("1220x940")
@@ -172,12 +130,8 @@ def build_interface(app, *, execution_steps, necessary_conditions, boundary_guid
     ttk.Label(brand, text="发票汇总助手", style="Title.TLabel").pack(anchor="w")
     ttk.Label(header, text=f"V{__version__}", style="Version.TLabel").pack(side="right")
     ttk.Label(header, text="离线处理", style="Subtitle.TLabel").pack(side="right", padx=(0, 16))
-    tabs = ttk.Notebook(outer, style="Underline.TNotebook")
-    tabs.pack(fill="both", expand=True)
-    process = ttk.Frame(tabs, padding=(12, 10))
-    rules = ttk.Frame(tabs, padding=(16, 14))
-    for frame, name in ((process, "处理发票"), (rules, "规则与更新")):
-        tabs.add(frame, text=name)
+    process = ttk.Frame(outer, padding=(12, 10))
+    process.pack(fill="both", expand=True)
     process.columnconfigure(0, weight=1)
     process.rowconfigure(6, weight=1)
     guidance = ttk.Frame(process)
@@ -322,63 +276,5 @@ def build_interface(app, *, execution_steps, necessary_conditions, boundary_guid
     footer = ttk.Frame(outer)
     footer.pack(fill="x", pady=(6, 0))
     ttk.Label(footer, textvariable=app.status, font=(FONT, 9), foreground=PALETTE["muted"], wraplength=850).pack(side="left")
-    ttk.Label(footer, text="共享规则版本见“规则与更新”", font=(FONT, 9), foreground=PALETTE["muted"]).pack(side="right")
     app.progress_bar = ThinProgressbar(outer, background=PALETTE["background"], accent=PALETTE["blue"])
     app.progress_bar.pack(fill="x", pady=(4, 0))
-    build_rules(app, rules, boundary_guide, retained_features)
-
-
-def build_rules(app, parent, boundary_guide, retained_features):
-    overview = surface(parent, padding=14)
-    overview.pack(fill="x", pady=(0, 12))
-    ttk.Label(overview, textvariable=app.version, style="Section.TLabel").pack(anchor="w", pady=(0, 9))
-    for text in (
-        "普通用户：完整解压即可使用随包规则，无需安装或同步 skill。下面的本机同步、导出和分发操作供维护者使用。",
-        "维护者：同步仅更新共享规则，人工校正、清空重填等功能保留。更新成功后关闭软件，打包整个软件文件夹分发。",
-        f"软件文件夹：{app.application_dir}",
-    ):
-        label = ttk.Label(overview, text=text, style="Muted.TLabel", wraplength=1050, justify="left")
-        label.pack(anchor="w", fill="x", pady=2)
-        overview.bind("<Configure>", lambda event, item=label: item.configure(wraplength=max(180, event.width - 34)), add="+")
-    source_panel = surface(parent, padding=12)
-    source_panel.pack(fill="x", pady=(0, 12))
-    ttk.Label(source_panel, text="本机规则来源", style="Section.TLabel").pack(anchor="w", pady=(0, 8))
-    source_row = ttk.Frame(source_panel, style="Surface.TFrame")
-    source_row.pack(fill="x")
-    entry = ttk.Entry(source_row, textvariable=app.source)
-    entry.pack(side="left", fill="x", expand=True)
-    app.interactive.append(entry)
-    app._button(source_row, "选择 skill", app._pick_source).pack(side="left", padx=(8, 0))
-    actions = ttk.Frame(source_panel, style="Surface.TFrame")
-    actions.pack(fill="x", pady=(9, 5))
-    for label, action, style_name in (
-        ("同步本机 skill", app._sync, "Primary.TButton"),
-        ("打开软件文件夹", lambda: app._open(app.application_dir), "Secondary.TButton"),
-        ("导出离线更新包", app._export, "Secondary.TButton"),
-        ("导入更新包", app._import, "Secondary.TButton"),
-        ("回退版本", app._rollback, "Secondary.TButton"),
-        ("解除绑定", app._unbind, "Secondary.TButton"),
-    ):
-        app._button(actions, label, action, style=style_name).pack(side="left", padx=(0, 6))
-    source_status = ttk.Label(source_panel, textvariable=app.source_status, style="Muted.TLabel", wraplength=1050, justify="left")
-    source_status.pack(anchor="w", fill="x", pady=(5, 0))
-    source_panel.bind("<Configure>", lambda event: source_status.configure(wraplength=max(180, event.width - 32)))
-    app.rule_tabs = ttk.Notebook(parent, style="Underline.TNotebook")
-    app.rule_tabs.pack(fill="both", expand=True)
-    boundary_tab = ttk.Frame(app.rule_tabs, padding=8)
-    app.update_tab = ttk.Frame(app.rule_tabs, padding=8)
-    reference_tab = ttk.Frame(app.rule_tabs, padding=8)
-    for frame, title in ((boundary_tab, "功能归属"), (app.update_tab, "本次更新结果"), (reference_tab, "skill 原始说明")):
-        app.rule_tabs.add(frame, text=title)
-    app.boundary_text = app._text(boundary_tab)
-    app.boundary_text.pack(fill="both", expand=True)
-    app._set_text(app.boundary_text, boundary_guide)
-    app._mark_headings(app.boundary_text, boundary_guide)
-    app.update_text = app._text(app.update_tab)
-    app.update_text.pack(fill="both", expand=True)
-    app._set_text(app.update_text, "同步、导入或回退共享规则后，这里会显示更新范围和保留的软件功能。\n\n保留的软件功能：" + retained_features)
-    reference_label = ttk.Label(reference_tab, text="此页保留 skill 原文作为共享规则来源参考。软件交互、人工校正及整批重填以“功能归属”页为准。", wraplength=1050, foreground=PALETTE["muted"], font=(FONT, 9))
-    reference_label.pack(anchor="w", fill="x", pady=(0, 6))
-    reference_tab.bind("<Configure>", lambda event: reference_label.configure(wraplength=max(180, event.width - 22)))
-    app.rule_text = app._text(reference_tab)
-    app.rule_text.pack(fill="both", expand=True)

@@ -3,7 +3,6 @@ import json
 import hashlib
 import os
 import queue
-import tempfile
 import threading
 import tkinter as tk
 from pathlib import Path
@@ -12,9 +11,8 @@ from tkinter import filedialog, messagebox, ttk
 
 from . import __version__
 from .controller import Controller, resource_root, application_root
-from .updates import EngineStore, export_update, read_manifest, SharedInterfaceIncompatible, sha256
+from .updates import EngineStore, read_manifest, sha256
 from .corrections import FIELDS, LABELS, field_value, normalize
-from .policy import BOUNDARY_GUIDE, RETAINED_FEATURES, describe_changes
 from .ui import FONT, PALETTE, build_interface, set_stage_style, surface, text_widget, skipped_pdf_notice
 from .ui_actions import decorate_action_button
 from .pdf_export import export_workbook_pdfs, output_fingerprints
@@ -32,16 +30,6 @@ NECESSARY_CONDITIONS = (
     "约定格式的 .xlsx，含“验收”“领用”、表头、日期与三行页脚。",
     "执行前关闭目标工作簿；软件和输入文件所在目录须可写。",
 )
-SOURCE_PROBLEMS = {
-    "unavailable": ("本机规则来源不可用", "到“规则与更新”重新选择正确的 skill 文件夹；或点击“解除绑定”，继续使用软件已安装的规则。"),
-    "invalid_source": ("本机规则内容需要修正", "请维护者检查来源文件和规则声明；新增未支持的策略须先适配软件。也可解除绑定，继续使用已安装的规则。"),
-    "incompatible": ("本机规则与软件不兼容", "请维护者检查规则实现与软件接口；新增接口或依赖须适配并发布新版软件。要继续使用已安装的规则，可先解除绑定。"),
-    "needs_adaptation": ("本机规则尚未完成实现", "请维护者补齐与规则说明对应的脚本或模板声明后再同步；也可解除绑定，继续使用已安装的规则。"),
-    "update_available": ("发现本机规则更新", "到“规则与更新”点击“同步本机 skill”；更新成功后重新进行只读预览。"),
-    "installed_invalid": ("软件已安装的规则无法读取", "请完整解压发布包，或联系维护者恢复可用规则。解除本机来源绑定不能修复损坏的随包规则。"),
-    "source_changed": ("本机规则检查尚未稳定", "请等待维护者保存完成后重新检查或同步；本次尚未激活变化的规则。"),
-}
-BOUNDARY_HEADINGS = ("功能归属与更新边界", "一、与 skill 保持一致：共享规则", "二、软件独有功能：随软件版本更新", "三、双方共同遵守：数据与模板约定", "软件执行流程", "原始 skill 说明的适用范围", "以后更新与分发")
 
 
 class App:
@@ -65,9 +53,9 @@ class App:
         self._preview_input_text = ("", "")
         self._restoring_inputs = False
         self._confirming_discard = False
-        self.source_issue = None
-        self._shown_source_issue = None
-        self._source_saved_report = None
+        self.rule_issue = None
+        self._shown_rule_issue = None
+        self._rule_saved_report = None
         self.controller = None
         self.last_result = None
         self._pdf_export_receipt = None
@@ -91,27 +79,15 @@ class App:
         self.metric_corrections = tk.StringVar(value="—")
         self.stage_title = tk.StringVar(value="等待只读预览")
         self.stage_detail = tk.StringVar(value="选择完整批次的 PDF 文件夹和目标工作簿，然后点击“只读预览”。")
-        self.version = tk.StringVar()
-        self.source_status = tk.StringVar()
-        settings = self.state_dir / "settings.json"
-        try:
-            saved = json.loads(settings.read_text(encoding="utf-8"))
-            if not isinstance(saved, dict):
-                raise ValueError("设置格式无效")
-            source = saved.get("skill_source", "") if saved.get("recognition_version") == self.store.version() else ""
-            if not isinstance(source, str):
-                source = ""
-        except (OSError, ValueError):
-            source = ""
-        self.source = tk.StringVar(value=source)
         self._build()
         self.pdf.trace_add("write", self._invalidate)
         self.book.trace_add("write", self._invalidate)
-        self.source.trace_add("write", self._source_changed)
         self.root.protocol("WM_DELETE_WINDOW", self._close)
-        self._refresh_version()
+        problem = self._check_rules()
+        if problem:
+            self._show_rule_problem(problem)
         self.root.after(100, self._poll)
-        self.root.after(3000, self._periodic_source)
+        self.root.after(3000, self._periodic_rules)
 
     def _button(self, parent, label, action, *, style="Secondary.TButton", register=True):
         widget = ttk.Button(parent, text=label, command=action, style=style)
@@ -123,14 +99,8 @@ class App:
         icon = resource_root() / "resources/app.ico"
         if icon.exists():
             self.root.iconbitmap(str(icon))
-        build_interface(self, execution_steps=EXECUTION_STEPS, necessary_conditions=NECESSARY_CONDITIONS,
-                        boundary_guide=BOUNDARY_GUIDE, retained_features=RETAINED_FEATURES)
+        build_interface(self, execution_steps=EXECUTION_STEPS, necessary_conditions=NECESSARY_CONDITIONS)
 
-    def _mark_headings(self, widget, content):
-        widget.tag_configure("section", font=(FONT, 13, "bold"), foreground=PALETTE["heading"], spacing1=14, spacing3=8)
-        for line_number, line in enumerate(content.splitlines(), 1):
-            if line in BOUNDARY_HEADINGS:
-                widget.tag_add("section", f"{line_number}.0", f"{line_number}.end")
 
     def _text(self, parent, height=15):
         return text_widget(parent, height)
@@ -312,10 +282,6 @@ class App:
     def _pick_book(self):
         self._choose_input(self.book, lambda: filedialog.askopenfilename(title="选择要原位更新的工作簿", filetypes=[("Excel 工作簿", "*.xlsx")], parent=self.root))
 
-    def _pick_source(self):
-        value = filedialog.askdirectory(title="选择包含 SKILL.md 和 scripts 的 skill 文件夹")
-        if value:
-            self.source.set(value)
 
     def _invalidate(self, *_):
         if self._restoring_inputs:
@@ -345,55 +311,38 @@ class App:
         self.status.set(title)
         self.summary.set("完成新的只读预览后，将显示发票数量、明细数量和金额。")
 
-    def _source_changed(self, *_):
-        self._save_settings()
-        problem = self._check_source()
-        if problem:
-            self._show_source_problem(problem)
-        else:
-            self._restore_source_preview()
 
-    def _save_settings(self):
-        (self.state_dir / "settings.json").write_text(json.dumps({"skill_source": self.source.get(), "recognition_version": self.store.version()}, ensure_ascii=False), encoding="utf-8")
-
-    def _check_source(self):
-        self.source_issue = None
-        source = self.source.get().strip()
+    def _check_rules(self):
+        self.rule_issue = None
         try:
-            if not source:
-                self.store.active()
-                self.source_status.set("正在使用随软件携带的规则，无需绑定本机 skill；人工校正、清空重填等功能由软件版本维护。")
-                return None
-            status = self.store.source_status(source)
+            self.store.active()
         except Exception as exc:
-            status = {"kind": "installed_invalid", "error": str(exc), "changed": [], "version": None}
-        if status["kind"] == "current":
-            self.source_status.set("共享规则已与本机 skill 同步 · 来源：" + source)
-            return None
-        title, next_step = SOURCE_PROBLEMS[status["kind"]]
-        reason = status["error"] or "涉及：" + "、".join(describe_changes(status["changed"]))
-        self.source_issue = dict(status, title=title, next_step=next_step, reason=reason)
-        self.source_status.set(f"{title}。{next_step}\n原因：{reason}")
-        return self.source_issue
+            self.rule_issue = {
+                "kind": "installed_invalid", "version": None,
+                "title": "随包规则不可用",
+                "next_step": "请重新完整解压软件包，或联系维护者获取新版软件。",
+                "reason": str(exc),
+            }
+        return self.rule_issue
 
-    def _show_source_problem(self, problem, *, notify=False):
+    def _show_rule_problem(self, problem, *, notify=False):
         self.execute.configure(state="disabled")
         self._correction_hint_enabled = False
         key = (problem["kind"], problem["reason"], problem["version"])
-        if key != self._shown_source_issue or notify:
+        if key != self._shown_rule_issue or notify:
             self._complete_stage("warning", problem["title"], problem["next_step"], notify=notify, reason=problem["reason"])
-        if key != self._shown_source_issue:
-            if self._source_saved_report is None:
-                self._source_saved_report = self.report.get("1.0", "end-1c")
-            kept = "\n\n原预览和已保存校正仍保留；解决来源问题后继续。" if self.preview_result else ""
-            original = "\n\n原检查报告：\n" + self._source_saved_report if self._source_saved_report else ""
+        if key != self._shown_rule_issue:
+            if self._rule_saved_report is None:
+                self._rule_saved_report = self.report.get("1.0", "end-1c")
+            kept = "\n\n原预览和已保存校正仍保留；恢复完整随包规则后重新检查。" if self.preview_result else ""
+            original = "\n\n原检查报告：\n" + self._rule_saved_report if self._rule_saved_report else ""
             self._set_text(self.report, f"{problem['title']}\n处理办法：{problem['next_step']}\n原因：{problem['reason']}" + kept + original)
-            self._shown_source_issue = key
+            self._shown_rule_issue = key
 
-    def _restore_source_preview(self):
+    def _restore_rule_preview(self):
         self._refresh_pdf_export_receipt()
-        saved_report = self._source_saved_report
-        self._source_saved_report = self._shown_source_issue = None
+        saved_report = self._rule_saved_report
+        self._rule_saved_report = self._shown_rule_issue = None
         if self.preview_result:
             problem = self._preview_problem(self.preview_result)
             if problem:
@@ -432,24 +381,20 @@ class App:
         if not original.startswith(heading):
             self._set_text(self.report, heading + original)
 
-    def _periodic_source(self):
+    def _periodic_rules(self):
         if not self.busy and not self._confirming_discard and not self._choosing_input:
             export_issue = self._refresh_pdf_export_receipt()
-            previous_issue = self.source_issue
-            problem = self._check_source()
+            previous_issue = self.rule_issue
+            problem = self._check_rules()
             if problem:
-                self._show_source_problem(problem)
+                self._show_rule_problem(problem)
             else:
                 if previous_issue:
-                    self._restore_source_preview()
+                    self._restore_rule_preview()
                 if export_issue:
                     self._complete_stage("warning", "PDF 导出需重新处理", export_issue)
-        self.root.after(3000, self._periodic_source)
+        self.root.after(3000, self._periodic_rules)
 
-    def _refresh_version(self):
-        self.version.set(f"软件 {__version__}  ·  共享规则版本 {self.store.version()}")
-        self._set_text(self.rule_text, (self.store.active() / "SKILL.md").read_text(encoding="utf-8"))
-        self._check_source()
 
     def _run(self, work, done, *, stage=None):
         if self.busy or self._choosing_input:
@@ -542,13 +487,13 @@ class App:
     def _preview(self):
         if self.busy or self._choosing_input:
             return
-        problem = self._check_source()
+        problem = self._check_rules()
         if problem:
-            self._show_source_problem(problem, notify=True)
+            self._show_rule_problem(problem, notify=True)
             return
         if not self._confirm_discard_corrections("重新预览"):
             return
-        self._source_saved_report = self._shown_source_issue = None
+        self._rule_saved_report = self._shown_rule_issue = None
         self._invalidate()
         directory, book = self.pdf.get(), self.book.get()
         self.controller = Controller(self.store.active(), lambda msg: self.events.put(("progress", msg)), state_dir=self.state_dir / "runs")
@@ -580,7 +525,7 @@ class App:
             if details["minimumRetainedRow"] is not None:
                 parts.append(f"  共享模板规则：最低保留到第 {details['minimumRetainedRow']} 行，保留必要空白明细 {details['requiredBlankRows']} 行，合计放在第 {details['footerRow']} 行。")
             elif "template_rules.json" not in read_manifest(preview.engine_dir)["files"]:
-                parts.append("  当前使用旧规则，尚无模板最低保留行；请同步更新后的本机 skill。")
+                parts.append("  当前随包规则较旧，尚无模板最低保留行；请联系维护者获取新版软件。")
             else:
                 parts.append(f"  未检测到规则中的完整侧边标识，按实际明细收缩；合计放在第 {details['footerRow']} 行。")
         parts.extend(self._correction_lines(preview.original_payload, preview.corrections))
@@ -644,9 +589,9 @@ class App:
             clicked = self.tree.identify_row(event.y)
             if not clicked:
                 return
-        problem = self._check_source()
+        problem = self._check_rules()
         if problem:
-            self._show_source_problem(problem, notify=True)
+            self._show_rule_problem(problem, notify=True)
             return
         preview = self.preview_result
         if preview is None:
@@ -698,7 +643,7 @@ class App:
             variables[field].trace_add("write", refresh_price)
         refresh_price()
         ttk.Label(frame, textvariable=price, style="Section.TLabel").grid(row=9, column=0, columnspan=3, sticky="w", pady=(10, 8))
-        ttk.Label(frame, text="明细条数和票面总额固定；漏项、多项或整票解析失败请改进 skill。", style="Muted.TLabel", wraplength=790).grid(row=10, column=0, columnspan=3, sticky="w", pady=(0, 12))
+        ttk.Label(frame, text="明细条数和票面总额固定；漏项、多项或整票解析失败请联系维护者处理。", style="Muted.TLabel", wraplength=790).grid(row=10, column=0, columnspan=3, sticky="w", pady=(0, 12))
         def save(restore=False):
             if self.preview_result is not preview or self.busy:
                 messagebox.showinfo("预览已失效", "请重新预览后再校正。", parent=dialog)
@@ -722,9 +667,9 @@ class App:
         preview = self.preview_result
         if preview is None:
             return
-        problem = self._check_source()
+        problem = self._check_rules()
         if problem:
-            self._show_source_problem(problem, notify=True)
+            self._show_rule_problem(problem, notify=True)
             return
         stale = self._preview_problem(preview)
         if stale:
@@ -881,101 +826,6 @@ class App:
             detail = export_issue or ("工作簿已变化，请重新预览并执行处理后再导出。" if result.get("requires_processing") else "本次处理报告已保留；解决下方原因后可重试导出。")
             self._complete_stage("error", "PDF 导出未完成", detail, notify=True, reason=reason)
 
-    def _sync(self):
-        source = self.source.get().strip()
-        if not source:
-            messagebox.showinfo("选择来源", "请先选择本机 skill 文件夹")
-            return
-        problem = self._check_source()
-        if problem and problem["kind"] != "update_available":
-            self._show_source_problem(problem, notify=True)
-            return
-        if problem and not self._confirm_discard_corrections("更新规则"):
-            return
-        expected_version = problem["version"] if problem else self.store.version()
-        def work():
-            try:
-                return self.store.sync(source, expected_version=expected_version)
-            except PermissionError as exc:
-                raise ValueError(f"同步未完成，软件文件夹不可写：{self.application_dir}。请将整个软件文件夹放到可写位置后重新同步。") from exc
-        self._run(work, lambda result: self._updated(result, action="同步"))
-
-    def _updated(self, result, *, action):
-        version_changed = result["version"] != result["previous_version"]
-        if self.source.get():
-            try:
-                source_status = self.store.source_status(self.source.get())
-                if action != "同步" and (source_status["changed"] or source_status["error"]):
-                    self.source.set("")
-            except (OSError, ValueError):
-                self.source.set("")
-        self._save_settings()
-        if version_changed:
-            self._invalidate()
-            self._source_saved_report = self._shown_source_issue = None
-        else:
-            self._restore_source_preview()
-        self._refresh_version()
-        if self.source_issue:
-            self._show_source_problem(self.source_issue)
-        self.status.set(f"共享规则{action}完成：" + result["version"])
-        changed = describe_changes(result["changed"])
-        scope = "\n".join("· " + item for item in changed) if changed else "共享规则已是当前版本，无需更换。"
-        compatibility = "更新范围声明及写表组件版本检查通过。"
-        if action != "回退":
-            compatibility += "共享脚本的既定接口检查通过。"
-        compatibility += "实际发票仍须只读预览和逐分复核。"
-        report = (f"共享规则{action}完成\n\n"
-                  f"共享规则版本：{result['previous_version']} → {result['version']}\n"
-                  "本次涉及的共享范围：\n" + scope + "\n\n"
-                  f"保留的软件功能：{RETAINED_FEATURES}\n"
-                  f"这些功能由软件 {__version__} 维护，skill 更新包不能替换。\n\n"
-                  "兼容性：" + compatibility + "\n"
-                  f"规则所在的软件文件夹：{self.application_dir}\n"
-                  + ("规则版本已变化，继续处理前请重新预览。" if version_changed else "规则版本未变化，当前预览和校正保留。")
-                  + "关闭软件后，可将整个文件夹打包分发。")
-        if self.source_issue:
-            report += f"\n\n绑定来源还有待处理问题：{self.source_issue['title']}。{self.source_issue['next_step']}"
-        self._set_text(self.update_text, report)
-        self.rule_tabs.select(self.update_tab)
-        message = "本次涉及：\n" + scope + f"\n\n保留的软件功能：{RETAINED_FEATURES}\n\n关闭软件后，可把整个软件文件夹打包分发。"
-        if self.source_issue:
-            message += f"\n\n绑定来源还有待处理问题：{self.source_issue['title']}。{self.source_issue['next_step']}"
-        (messagebox.showwarning if self.source_issue else messagebox.showinfo)(f"共享规则{action}完成", message, parent=self.root)
-
-    def _export(self):
-        source = self.source.get().strip()
-        if not source:
-            messagebox.showinfo("选择来源", "请先绑定已完成脚本适配和测试的本机 skill")
-            return
-        output = filedialog.asksaveasfilename(title="导出离线 skill 更新包", defaultextension=".zip", initialfile="invoice-skill-update.zip", filetypes=[("更新包", "*.zip")])
-        if output:
-            def work():
-                try:
-                    result = export_update(source, output, read_manifest(self.store.active()))
-                except SharedInterfaceIncompatible as exc:
-                    self.store.remember_interface_failure(getattr(exc, "version", None), exc)
-                    raise
-                self.store.clear_interface_failure(result["version"])
-                return result
-            self._run(work, lambda result: messagebox.showinfo("导出完成", "共享规则更新包已保存：" + output + f"\n\n该包声明共享规则范围；软件功能（{RETAINED_FEATURES}）随软件版本维护。", parent=self.root))
-
-    def _import(self):
-        path = filedialog.askopenfilename(title="选择可信的离线 skill 更新包", filetypes=[("更新包", "*.zip")])
-        if path and self._confirm_discard_corrections("导入规则更新"):
-            self._run(lambda: self.store.install(path), lambda result: self._updated(result, action="导入"))
-
-    def _rollback(self):
-        if not self._confirm_discard_corrections("回退规则版本"):
-            return
-        def done(result):
-            self.source.set("")
-            self._updated(result, action="回退")
-        self._run(self.store.rollback, done)
-
-    def _unbind(self):
-        self.source.set("")
-        self._refresh_version()
 
     def _open(self, value):
         try:
