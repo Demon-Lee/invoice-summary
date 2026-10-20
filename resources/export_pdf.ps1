@@ -52,8 +52,59 @@ function Release-Com($value) {
     }
 }
 
+function Select-ExportPrinter($application) {
+    # Excel pagination can inherit scaling from third-party virtual drivers.
+    # Choose the Windows PDF driver only for this private Excel instance.
+    # ActivePrinter needs a workbook and its localised "on" separator.
+    $original = [string]$application.ActivePrinter
+    $devices = $null
+    try {
+        $devices = Get-Item -LiteralPath 'HKCU:\Software\Microsoft\Windows NT\CurrentVersion\Devices' -ErrorAction Stop
+        $names = @($devices.GetValueNames())
+        $preferred = @($names | Where-Object { $_ -ieq 'Microsoft Print to PDF' } | Select-Object -First 1)
+        if ($preferred.Count -eq 0) {
+            $registered = @(Get-CimInstance Win32_Printer -Filter "DriverName='Microsoft Print To PDF'" -ErrorAction Stop)
+            $preferred = @($registered.Name | Where-Object { $names -contains $_ } | Select-Object -First 1)
+        }
+        if ($preferred.Count -eq 0) { return $original }
+        $preferred = [string]$preferred[0]
+        $binding = [string]$devices.GetValue($preferred)
+        if ($binding.IndexOf(',') -lt 0) { return $original }
+        $port = $binding.Substring($binding.IndexOf(',') + 1)
+        if (-not $port.EndsWith(':')) { return $original }
+        $separators = @()
+        $current = @($names | Sort-Object { $_.Length } -Descending | Where-Object { $original.StartsWith($_, [StringComparison]::OrdinalIgnoreCase) } | Select-Object -First 1)
+        if ($current.Count -eq 1) {
+            $currentName = [string]$current[0]
+            $currentBinding = [string]$devices.GetValue($currentName)
+            if ($currentBinding.IndexOf(',') -ge 0) {
+                $currentPort = $currentBinding.Substring($currentBinding.IndexOf(',') + 1)
+                $length = $original.Length - $currentName.Length - $currentPort.Length
+                if ($length -gt 0 -and $original.EndsWith($currentPort, [StringComparison]::OrdinalIgnoreCase)) {
+                    $separators += $original.Substring($currentName.Length, $length)
+                }
+            }
+        }
+        $separators += ' on '
+        foreach ($separator in ($separators | Select-Object -Unique)) {
+            try {
+                $application.ActivePrinter = $preferred + $separator + $port
+                return $original
+            } catch { }
+        }
+        # Keep the original device if the optional Windows PDF driver is absent
+        # or unusable. Python still validates the actual PDF paper dimensions.
+        return $original
+    } catch {
+        return $original
+    } finally {
+        if ($null -ne $devices) { $devices.Dispose() }
+    }
+}
+
 $excel = $books = $book = $sheet = $setup = $sheets = $guard = $null
 $owned = $false
+$originalPrinter = $null
 try {
     $plan = Get-Content -LiteralPath $PlanFile -Raw -Encoding UTF8 | ConvertFrom-Json
     if (@($plan.sheets).Count -ne 2) { throw 'Expected exactly two export worksheets.' }
@@ -77,6 +128,7 @@ try {
     $excel.AskToUpdateLinks = $false
     $excel.AutomationSecurity = 3
     $book = $books.Open($WorkbookInput, 0, $true)
+    $originalPrinter = Select-ExportPrinter $excel
     $sheets = $book.Worksheets
     foreach ($item in $plan.sheets) {
         try {
@@ -107,6 +159,9 @@ try {
     # No workbook Save: all pagination settings belong to the temporary copy.
     @{ status = 'completed'; sheets = @($plan.sheets) } | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath $ReportFile -Encoding UTF8
 } finally {
+    # Restore while the temporary workbook is still open: Excel may reject
+    # ActivePrinter changes when its Workbooks collection is empty.
+    try { if ($owned -and $null -ne $book -and $originalPrinter) { $excel.ActivePrinter = $originalPrinter } } catch { }
     try { if ($null -ne $book) { [void]$book.Close($false) } } catch { }
     Release-Com $setup
     Release-Com $sheet

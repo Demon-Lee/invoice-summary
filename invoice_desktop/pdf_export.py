@@ -114,7 +114,10 @@ def _validate_pdfs(stage, plan):
                 raise ValueError(f"{sheet['name']} 的 PDF 没有页面")
             for page in pdf.pages:
                 if abs(page.width - 841.89) > 2 or abs(page.height - 595.28) > 2:
-                    raise ValueError(f"{sheet['name']} 的 PDF 不是 A4 横向，已停止发布")
+                    width_mm, height_mm = page.width * 25.4 / 72, page.height * 25.4 / 72
+                    raise ValueError(f"{sheet['name']} 第 {page.page_number} 页实际尺寸为 {width_mm:.1f} × {height_mm:.1f} 毫米，"
+                                     "需要 A4 横向（297 × 210 毫米），已停止保存 PDF。"
+                                     "可尝试启用 Windows 的 Microsoft Print to PDF 后重新导出。")
             files.append({"sheet": sheet["name"], "name": path.name, "pages": len(pdf.pages)})
     return files
 
