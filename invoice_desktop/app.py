@@ -31,8 +31,6 @@ NECESSARY_CONDITIONS = (
     "约定格式的 .xlsx，含“验收”“领用”、表头、日期与三行页脚。",
     "执行前关闭目标工作簿；软件和输入文件所在目录须可写。",
 )
-PROCESS_NOTICE = "执行会重命名 PDF，清空两表主表旧明细（含品牌、备注）后整批重填；保留右侧模板文字；原位更新，不自动备份。"
-PREVIEW_NOTE = "完整批次明细 · 校正仅更新预览 · 保存后自动重新检查"
 SOURCE_PROBLEMS = {
     "unavailable": ("本机规则来源不可用", "到“规则与更新”重新选择正确的 skill 文件夹；或点击“解除绑定”，继续使用软件已安装的规则。"),
     "invalid_source": ("本机规则内容需要修正", "请维护者检查来源文件和规则声明；新增未支持的策略须先适配软件。也可解除绑定，继续使用已安装的规则。"),
@@ -42,63 +40,7 @@ SOURCE_PROBLEMS = {
     "installed_invalid": ("软件已安装的规则无法读取", "请完整解压发布包，或联系维护者恢复可用规则。解除本机来源绑定不能修复损坏的随包规则。"),
     "source_changed": ("本机规则检查尚未稳定", "请等待维护者保存完成后重新检查或同步；本次尚未激活变化的规则。"),
 }
-HELP_HEADINGS = ("执行步骤", "必要条件", "阶段提示", "导出 PDF", "人工校正", "工作簿详细要求", "处理与恢复", "识别原则", "普通用户：解压即用", "维护者：规则更新与分发", "规则问题的处理办法", "功能归属与更新边界", "一、与 skill 保持一致：共享规则", "二、软件独有功能：随软件版本更新", "三、双方共同遵守：数据与模板约定", "软件执行流程", "原始 skill 说明的适用范围", "以后更新与分发")
-HELP = "\n".join(("执行步骤", *EXECUTION_STEPS, "", PROCESS_NOTICE, "", "必要条件", *NECESSARY_CONDITIONS)) + """
-
-阶段提示
-操作按钮下方显示当前阶段与下一步。蓝色表示处理中，绿色表示通过，黄色表示预览异常或清理提醒，红色表示操作未完成。只读预览和执行结束时会弹出结果提示，关闭提示后仍可查看页面上的阶段结果与详细报告。
-
-预览完成只表示检查结束；只有“预览通过”才可以执行。人工校正后的检查只更新页面提示。更换输入或更新规则后，须重新预览。
-
-检查报告把异常和失败原因放在前面，可通过右侧滚动条查看全文。“复制报告”复制完整报告，便于保存或向维护者反馈问题。
-
-打开发票目录、打开工作簿、打开导出目录集中在操作区下方的“打开位置”，分别使用文件夹、表格、导出文件夹图标。未选择对应路径或尚未成功导出时，对应入口禁用；处理中暂不可打开。
-
-使用新版共享规则时，按内容明确识别出的验收单、领用单等非发票 PDF 会自动跳过，不参与发票编号、改名、填表或金额统计。完成弹窗列出跳过文件，超过八项时完整清单见检查报告。扫描件、损坏文件、类型不明或疑似发票缺字段仍提示异常；目录中没有可处理发票时禁止执行。
-
-导出 PDF
-本次执行处理并通过金额核对后，“导出 PDF”才会启用。仅选择文件、完成预览或人工校正均不能导出；更换输入、重新预览、更新已使用规则或重启软件后，须重新预览并执行成功。弹窗选择保存位置，默认为工作簿旁的“导出PDF”文件夹，分别生成“验收单.pdf”和“领用单.pdf”。A4 横向，所有列保持一页宽，行数多时向下自动分页。完成后可点击“打开导出目录”。
-导出前检查工作簿仍与本次处理完成的版本一致；外部修改后需重新预览并执行。导出不重填工作簿，也不保存临时打印设置；不会重新核对发票金额。同名 PDF 经确认才替换，普通导出失败可重试，成功后也可重复导出。PDF 导出由软件维护，skill 同步不会改动此功能。
-
-人工校正
-预览结束后，明细标题旁突出显示“双击明细，可人工校正”。双击需要修改的明细，或选中后按 Enter。对照原 PDF 校正产品名称、规格型号、单位、数量、含税金额和生产厂家，单价自动计算。保存后重新检查金额、文件名和工作簿映射；通过后才可执行。“恢复识别值”可撤销该行校正。
-
-校正只对本次预览有效，保存时不会改动 PDF、工作簿或 skill。已有校正时，预览按钮会标明“清除校正”；重新预览、更换输入路径、更新规则或关闭软件前会提示清除校正，选择“否”保留原结果。保存校正后已自动检查，不必再次预览。普通操作没有校正时不弹此提醒。未完成执行的校正会随恢复记录保留，恢复期间固定使用该次校正。
-
-不支持增删预览明细或修改票面总额。漏项、多项、整票无法解析等结构问题仍需改进 skill。金额始终逐分核对，正式填表使用本次预览及人工校正后的结果。
-
-工作簿详细要求
-工作簿须包含“验收”“领用”两张表，且各有完整表头、明细格式行、唯一三行页脚（合计、签字、说明）和日期标签。
-
-每次按完整批次重填：清空表头与合计之间的主表明细内容，包括品牌、备注、其他手填内容、批注和超链接。列范围按完整表头（包括合并表头）界定；主表右侧“第二联：财务报销”等模板内容保留原位置和样式。保留表头、格式、签字和说明页脚，按当前明细数量调整数据区并重新计算单价及合计。PDF 目录中没有的旧明细将移除；主表明细中的人工修改不会保留。旧版已删除的模板文字不会自动补回，请补回文字或使用完整模板。
-
-处理与恢复
-只读预览不会重命名 PDF，也不会保存或清空工作簿。预览通过后才可执行：软件会改名、清空旧明细并重填两表、设置字体、调用 Excel 重算，并逐票复核金额。出现重名、字段不确定、金额不一致或模板结构异常时停止。解决异常后重新预览。
-
-如果 Excel 操作或金额验证失败，解决原因后重新选择同一批次和工作簿进行只读预览，可继续未完成的处理。重启软件后仍可恢复；恢复期间请保持发票内容及识别版本一致。
-
-识别原则
-识别依据与 skill 相同：从 PDF 内容读取字段，合并规定的折扣与运费，保留重复明细，空数量按 1，金额逐分核对。当前不支持扫描图片 OCR。
-
-普通用户：解压即用
-完整解压整个发布包，双击 InvoiceSummary.exe，按“执行步骤”操作即可。软件使用随包规则，无需安装 skill、选择本机 skill 或先做同步。请保留 _internal 和 recognition 文件夹。
-
-维护者：规则更新与分发
-在“规则与更新”中选择可信的 summarize-invoice-pdfs 文件夹，点击“同步本机 skill”。同步成功后，新规则保存在软件文件夹里的 recognition 目录。关闭软件，把整个软件文件夹打包发给别人，对方完整解压后直接运行即可使用随包规则。请一并保留 _internal 和 recognition 两个文件夹。
-
-同步规则需要软件文件夹可写。你的本机 skill 路径绑定仅保存在本机；接收方无需绑定 skill 或导入规则包。仍可单独导出、导入离线更新包。处理时固定使用界面显示的识别版本。
-
-只修改 SKILL.md 文字不会自动改进算法：需要同时更新对应脚本和测试。共享字段、模板约定或依赖变化可能要求升级软件。人工校正和清空重填由软件维护。更新前请由 skill 维护者运行其测试。
-
-模板最低保留行采用与 skill 共用的 template_rules.json。按“第二联：财务报销”最后一个字实际所在行保留必要空白明细行，合计在其下方；预览报告显示实际行号。正式发布包携带已同步的规则，普通用户直接使用即可。右侧模板需使用固定值，公式会报告坐标并停止。受支持的标识和排列声明可直接同步，未知策略或写表器变化需要升级软件。
-
-规则问题的处理办法
-本机来源不存在或文件不完整：重新选择正确来源，或解除绑定继续使用已安装规则。
-规则内容无效或只有说明变化：由维护者修正声明、补齐对应实现后再同步。
-写表组件或接口不兼容：由维护者适配并发布新版软件；也可解除绑定继续使用已安装规则。
-发现兼容的本机规则更新：同步成功后重新预览。
-已安装规则损坏：完整解压发布包或联系维护者恢复，解除绑定不能修复已安装规则。
-""" + "\n" + BOUNDARY_GUIDE
+BOUNDARY_HEADINGS = ("功能归属与更新边界", "一、与 skill 保持一致：共享规则", "二、软件独有功能：随软件版本更新", "三、双方共同遵守：数据与模板约定", "软件执行流程", "原始 skill 说明的适用范围", "以后更新与分发")
 
 
 class App:
@@ -143,7 +85,6 @@ class App:
         self.stage_detail = tk.StringVar(value="选择完整批次的 PDF 文件夹和目标工作簿，然后点击“只读预览”。")
         self.version = tk.StringVar()
         self.source_status = tk.StringVar()
-        self.preview_note = tk.StringVar(value=PREVIEW_NOTE)
         settings = self.state_dir / "settings.json"
         try:
             saved = json.loads(settings.read_text(encoding="utf-8"))
@@ -174,13 +115,12 @@ class App:
         if icon.exists():
             self.root.iconbitmap(str(icon))
         build_interface(self, execution_steps=EXECUTION_STEPS, necessary_conditions=NECESSARY_CONDITIONS,
-                        process_notice=PROCESS_NOTICE, preview_note=PREVIEW_NOTE, help_text=HELP,
                         boundary_guide=BOUNDARY_GUIDE, retained_features=RETAINED_FEATURES)
 
     def _mark_headings(self, widget, content):
         widget.tag_configure("section", font=(FONT, 13, "bold"), foreground=PALETTE["heading"], spacing1=14, spacing3=8)
         for line_number, line in enumerate(content.splitlines(), 1):
-            if line in HELP_HEADINGS:
+            if line in BOUNDARY_HEADINGS:
                 widget.tag_add("section", f"{line_number}.0", f"{line_number}.end")
 
     def _text(self, parent, height=15):
@@ -210,14 +150,9 @@ class App:
             return
         self.status.set("完整报告已复制，可粘贴保存或提供给维护者。")
 
-    def _update_preview_note(self, preview=None):
-        count = len(preview.corrections) if preview else 0
-        if count and preview.resume_pending:
-            self.preview_button.configure(text="只读预览")
-            self.preview_note.set(f"已恢复上次处理的 {count} 条校正；请先完成该次处理，恢复期间固定使用已保存的校正。")
-            return
-        self.preview_button.configure(text="重新预览（清除校正）" if count else "只读预览")
-        self.preview_note.set(f"本次已校正 {count} 条明细；再次预览会清除校正。保存校正后已自动重新检查，可继续校正或执行。" if count else PREVIEW_NOTE)
+    def _update_preview_button(self, preview=None):
+        clear_corrections = bool(preview and preview.corrections and not preview.resume_pending)
+        self.preview_button.configure(text="重新预览（清除校正）" if clear_corrections else "只读预览")
 
     def _confirm_discard_corrections(self, action):
         count = len(self.preview_result.corrections) if self.preview_result else 0
@@ -367,7 +302,7 @@ class App:
                 return
         self.preview_result = None
         self._pdf_export_receipt = None
-        self._update_preview_note()
+        self._update_preview_button()
         self._update_metrics()
         self.execute.configure(state="disabled")
         self._correction_hint_enabled = False
@@ -583,7 +518,7 @@ class App:
     def _render_preview(self, preview, *, notify=False, phase=None):
         self.preview_result = preview
         self._preview_input_text = (self.pdf.get(), self.book.get())
-        self._update_preview_note(preview)
+        self._update_preview_button(preview)
         self._render_table(preview.payload, corrections=preview.corrections)
         self._correction_hint_enabled = bool(any(record.get("rows") for record in preview.payload.get("records", [])) and not preview.resume_pending)
         invoices = len(preview.payload.get("records", []))
@@ -777,7 +712,7 @@ class App:
             result["_pdf_export_blocked"] = export_issue
         export_ready = self._can_export_pdf()
         self.preview_result = None
-        self._update_preview_note()
+        self._update_preview_button()
         self._correction_hint_enabled = False
         self._render_table(result["payload"], result.get("rename_plan"), result.get("corrections"))
         self._update_metrics(result["payload"], result.get("total"), result.get("corrections"))

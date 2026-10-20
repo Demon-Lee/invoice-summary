@@ -174,8 +174,7 @@ def guide_card(parent, column, title, items, *, numbered=False):
     return card
 
 
-def build_interface(app, *, execution_steps, necessary_conditions, process_notice, preview_note,
-                    help_text, boundary_guide, retained_features):
+def build_interface(app, *, execution_steps, necessary_conditions, boundary_guide, retained_features):
     root = app.root
     root.title(f"发票汇总助手 V{__version__}")
     root.geometry("1220x940")
@@ -200,21 +199,17 @@ def build_interface(app, *, execution_steps, necessary_conditions, process_notic
     tabs.pack(fill="both", expand=True)
     process = ttk.Frame(tabs, padding=(12, 10))
     rules = ttk.Frame(tabs, padding=(16, 14))
-    help_tab = ttk.Frame(tabs, padding=(16, 14))
-    for frame, name in ((process, "处理发票"), (rules, "规则与更新"), (help_tab, "使用说明")):
+    for frame, name in ((process, "处理发票"), (rules, "规则与更新")):
         tabs.add(frame, text=name)
     process.columnconfigure(0, weight=1)
-    process.rowconfigure(7, weight=1)
+    process.rowconfigure(6, weight=1)
     guidance = ttk.Frame(process)
     guidance.grid(row=0, column=0, sticky="ew", pady=(0, 7))
     guidance.columnconfigure((0, 1), weight=1, uniform="guidance")
     guide_card(guidance, 0, "执行步骤", execution_steps, numbered=True)
     guide_card(guidance, 1, "必要条件", necessary_conditions)
-    notice = ttk.Label(process, text=process_notice, style="Notice.TLabel", wraplength=1050, justify="left")
-    notice.grid(row=1, column=0, sticky="ew", pady=(0, 7))
-    process.bind("<Configure>", lambda event: notice.configure(wraplength=max(180, event.width - 48)))
     files = surface(process, padding=9)
-    files.grid(row=2, column=0, sticky="ew", pady=(0, 7))
+    files.grid(row=1, column=0, sticky="ew", pady=(0, 7))
     files.columnconfigure(1, weight=1)
     for row, label, variable, action, button_name in (
         (0, "PDF 文件夹", app.pdf, app._pick_pdf, "选择文件夹"),
@@ -226,7 +221,7 @@ def build_interface(app, *, execution_steps, necessary_conditions, process_notic
         app.interactive.append(entry)
         app._button(files, button_name, action).grid(row=row, column=2, padx=(10, 0), pady=3)
     actions = ttk.Frame(process)
-    actions.grid(row=3, column=0, sticky="ew", pady=(0, 7))
+    actions.grid(row=2, column=0, sticky="ew", pady=(0, 7))
     action_buttons = ttk.Frame(actions)
     action_buttons.pack(fill="x")
     app.preview_button = app._button(action_buttons, "只读预览", app._preview)
@@ -279,7 +274,7 @@ def build_interface(app, *, execution_steps, necessary_conditions, process_notic
     locations.bind("<Configure>", layout_locations)
     layout_locations()
     app.stage_card = surface(process, padding=9)
-    app.stage_card.grid(row=4, column=0, sticky="ew", pady=(0, 7))
+    app.stage_card.grid(row=3, column=0, sticky="ew", pady=(0, 7))
     app.stage_card.columnconfigure(1, weight=1)
     app.stage_icon = tk.Canvas(app.stage_card, width=32, height=32, highlightthickness=0)
     app.stage_icon.grid(row=0, column=0, rowspan=2, padx=(0, 10))
@@ -292,7 +287,7 @@ def build_interface(app, *, execution_steps, necessary_conditions, process_notic
     app.stage_card.bind("<Configure>", lambda event: [label.configure(wraplength=max(180, event.width - 180)) for label in (app.stage_heading, app.stage_body)])
     app._set_stage("idle", app.stage_title.get(), app.stage_detail.get())
     metrics = ttk.Frame(process)
-    metrics.grid(row=5, column=0, sticky="ew", pady=(0, 7))
+    metrics.grid(row=4, column=0, sticky="ew", pady=(0, 7))
     for column, title, variable, style_name in (
         (0, "发票数量（张）", app.metric_invoices, "Metric.TLabel"),
         (1, "明细数量（条）", app.metric_rows, "Metric.TLabel"),
@@ -308,19 +303,15 @@ def build_interface(app, *, execution_steps, necessary_conditions, process_notic
         value.pack(anchor="w", fill="x")
         card.bind("<Configure>", lambda event, label=value: label.configure(wraplength=max(100, event.width - 20)))
     table_heading = ttk.Frame(process)
-    table_heading.grid(row=6, column=0, sticky="ew", pady=(0, 4))
+    table_heading.grid(row=5, column=0, sticky="ew", pady=(0, 4))
     ttk.Label(table_heading, text="发票明细", font=(FONT, 11, "bold")).pack(side="left", padx=(0, 10))
     app.correction_hint = tk.Label(table_heading, text="预览后可双击校正", image=app.root._correction_icons[1],
                                    compound="left", font=(FONT, 9, "bold"), padx=7, pady=4,
                                    bg=PALETTE["background"], fg=PALETTE["muted"],
                                    highlightthickness=1, highlightbackground=PALETTE["line"])
     app.correction_hint.pack(side="left", padx=(0, 10))
-    app.preview_note.set(preview_note)
-    note = ttk.Label(table_heading, textvariable=app.preview_note, font=(FONT, 9), foreground=PALETTE["muted"], wraplength=900, justify="left")
-    note.pack(side="left", fill="x", expand=True)
-    note.bind("<Configure>", lambda event: note.configure(wraplength=max(140, event.width - 4)))
     table = surface(process)
-    table.grid(row=7, column=0, sticky="nsew")
+    table.grid(row=6, column=0, sticky="nsew")
     table.rowconfigure(0, weight=1)
     table.rowconfigure(1, minsize=14)
     table.columnconfigure(0, weight=1)
@@ -348,13 +339,13 @@ def build_interface(app, *, execution_steps, necessary_conditions, process_notic
     app.tree.configure(yscrollcommand=vertical.set, xscrollcommand=horizontal.set)
     app.detail_columns = ProportionalTreeviewColumns(app.tree, columns, weights, minimums)
     report_heading = ttk.Frame(process)
-    report_heading.grid(row=8, column=0, sticky="ew", pady=(7, 3))
+    report_heading.grid(row=7, column=0, sticky="ew", pady=(7, 3))
     ttk.Label(report_heading, text="检查、异常与实际结果", font=(FONT, 11, "bold")).pack(side="left")
     app.copy_report_button = app._button(report_heading, "复制报告", app._copy_report, style="Link.TButton")
     app.copy_report_button.pack(side="right")
     app.copy_report_button.configure(state="disabled")
     report_panel = surface(process)
-    report_panel.grid(row=9, column=0, sticky="ew")
+    report_panel.grid(row=8, column=0, sticky="ew")
     app.report = app._text(report_panel, height=3)
     app.report.pack(fill="both", expand=True)
     footer = ttk.Frame(outer)
@@ -364,12 +355,6 @@ def build_interface(app, *, execution_steps, necessary_conditions, process_notic
     app.progress_bar = ThinProgressbar(outer, background=PALETTE["background"], accent=PALETTE["blue"])
     app.progress_bar.pack(fill="x", pady=(4, 0))
     build_rules(app, rules, boundary_guide, retained_features)
-    help_panel = surface(help_tab)
-    help_panel.pack(fill="both", expand=True)
-    help_widget = app._text(help_panel)
-    help_widget.pack(fill="both", expand=True)
-    app._set_text(help_widget, help_text)
-    app._mark_headings(help_widget, help_text)
 
 
 def build_rules(app, parent, boundary_guide, retained_features):

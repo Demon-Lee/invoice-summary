@@ -16,11 +16,11 @@
 
 ## Task 1：界面删减
 
-- [ ] 保存当前EXE、规则、skill、engine及受保护业务源文件基线。
-- [ ] ui.py删除process_notice／preview_note／help_text参数，删除通知控件、明细说明控件、help_tab及帮助内容；主表各区行号依次0至8，rowconfigure(6, weight=1)保持明细扩展。
-- [ ] app.py删除PROCESS_NOTICE／PREVIEW_NOTE／HELP与preview_note变量；_build参数同步。_update_preview_note改为_update_preview_button，仅在有校正且非恢复期间显示“重新预览（清除校正）”，其他情况“只读预览”；三个调用点同步。HELP_HEADINGS缩减命名为BOUNDARY_HEADINGS，保留规则页标题格式化。
-- [ ] 版本改为1.1.14，README及使用说明反映仅两个主页面，并保留外部说明文件。
-- [ ] 静态编译14模块、无旧引用、diff检查及独立复审；修复实际问题。
+- [x] 保存当前EXE、规则、skill、engine及受保护业务源文件基线。
+- [x] ui.py删除process_notice／preview_note／help_text参数，删除通知控件、明细说明控件、help_tab及帮助内容；主表各区行号依次0至8，rowconfigure(6, weight=1)保持明细扩展。
+- [x] app.py删除PROCESS_NOTICE／PREVIEW_NOTE／HELP与preview_note变量；_build参数同步。_update_preview_note改为_update_preview_button，仅在有校正且非恢复期间显示“重新预览（清除校正）”，其他情况“只读预览”；三个调用点同步。HELP_HEADINGS缩减命名为BOUNDARY_HEADINGS，保留规则页标题格式化。
+- [x] 版本改为1.1.14，README及使用说明反映仅两个主页面，并保留外部说明文件。
+- [x] 静态编译14模块、无旧引用、diff检查及独立复审；修复实际问题。
 
 ## Task 2：本地交付
 
