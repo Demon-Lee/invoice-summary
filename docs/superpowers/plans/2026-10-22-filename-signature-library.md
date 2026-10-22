@@ -44,9 +44,9 @@ Files: signature_ui.py, pdf_export_ui.py, 使用说明.txt, current signature sp
 
 - [x] Capture old private-directory byte hashes and full config in ignored baseline, rules/engine/skill/protected code fingerprints. Do not print personal names/images.
 - [x] Build using tools/build.ps1. Check original private files unchanged by build; check built v2 ID/role mapping and each migrated original image byte hash, preserved legacy backup/other user files, saved embedded modules/resources/rules.
-- [ ] Archive old folder, guard running program and absolute paths/reparse points, then replace original release/InvoiceSummary. Preserve old same-version packages before repackaging.
-- [ ] Package Windows/source ZIP, exclude entire personal directory, compare every member, record hashes/counts/review/runtime limitations, commit docs and repackage source.
+- [x] Archive old folder, guard running program and absolute paths/reparse points, then replace original release/InvoiceSummary. Preserve old same-version packages before repackaging.
+- [x] Package Windows/source ZIP, exclude entire personal directory, compare every member, record hashes/counts/review/runtime limitations, commit docs and repackage source.
 
 ## Progress
 
-Storage and UI implemented; independent task/whole-change reviews resolved signed-intent loss on failed or successful-empty refresh. Final review found no remaining actionable findings. Static compilation and Windows build passed; saved build migration preserves 12 IDs, labels, roles and original byte hashes, legacy backups and source directory unchanged. Local publication/package checks in progress. No GUI/business runtime validation is claimed.
+Storage and UI implemented; independent task/whole-change reviews resolved signed-intent loss on failed or successful-empty refresh. Final review found no remaining actionable findings. Static compilation and Windows build passed; saved build migration preserves 12 IDs, labels, roles and original byte hashes, legacy backups and source directory unchanged. Local publication and Windows/source archive member/hash checks passed; 1338 local files, 27 private files, 1311 public Windows ZIP members. Final release record committed and source repackaged. No GUI/business runtime validation is claimed.
