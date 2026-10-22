@@ -17,6 +17,7 @@ from .ui import FONT, PALETTE, build_interface, set_stage_style, surface, text_w
 from .ui_actions import decorate_action_button
 from .pdf_export import export_workbook_pdfs, output_fingerprints
 from .pdf_export_ui import choose_export_directory
+from .window_icon import set_window_icon
 
 EXECUTION_STEPS = (
     "1. 选择完整批次的 PDF 文件夹和目标 .xlsx 工作簿。",
@@ -98,7 +99,7 @@ class App:
     def _build(self):
         icon = resource_root() / "resources/app.ico"
         if icon.exists():
-            self.root.iconbitmap(str(icon))
+            set_window_icon(self.root, icon)
         build_interface(self, execution_steps=EXECUTION_STEPS, necessary_conditions=NECESSARY_CONDITIONS)
 
 

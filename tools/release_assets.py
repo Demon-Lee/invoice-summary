@@ -23,8 +23,11 @@ for y, right in ((85,168),(112,168),(139,144)):
     draw.rounded_rectangle((88*scale,y*scale,right*scale,(y+9)*scale), radius=4*scale, fill="#98b6d6")
 draw.ellipse((143*scale,149*scale,227*scale,233*scale), fill="#21966a", outline="white", width=7*scale)
 draw.line((163*scale,190*scale,179*scale,205*scale,209*scale,175*scale), fill="white", width=9*scale, joint="curve")
-icon = icon.resize((256,256), Image.Resampling.LANCZOS)
-icon.save(resources / "app.ico", sizes=[(16,16),(32,32),(48,48),(64,64),(128,128),(256,256)])
+icon_sizes = (16, 20, 24, 28, 32, 36, 40, 48, 56, 64, 72, 80, 96, 112, 128, 144, 160, 192, 224, 256)
+# Render every frame directly from the drawing; avoid a second downsampling pass.
+icon_frames = [icon.resize((size, size), Image.Resampling.LANCZOS) for size in icon_sizes]
+icon_frames[-1].save(resources / "app.ico", sizes=[frame.size for frame in icon_frames],
+                     append_images=icon_frames[:-1])
 
 packages = ("pdfplumber", "pdfminer.six", "Pillow", "pypdfium2", "openpyxl", "lxml", "et_xmlfile", "cryptography", "cffi", "pycparser", "charset-normalizer", "pyinstaller")
 collected = []
