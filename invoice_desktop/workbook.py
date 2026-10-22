@@ -427,6 +427,8 @@ def plan_workbook(path, payload, run_date=None, *, template_rules=None):
                         cell.data_type = "s"
                     align = copy(cell.alignment)
                     align.horizontal = align.vertical = "center"
+                    align.wrap_text = True
+                    align.shrink_to_fit = False
                     cell.alignment = align
             count = footer-last-1
             removed[name] = count

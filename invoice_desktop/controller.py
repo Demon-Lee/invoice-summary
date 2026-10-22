@@ -72,7 +72,47 @@ class ExcelAdapter:
         self._run(resource_root() / "resources/check_excel.ps1", [])
 
     def apply(self, script, workbook):
-        self._run(resource_root() / "resources/run_excel.ps1", ["-EngineScript", str(script), "-WorkbookInput", str(workbook)])
+        from .layout import layout_plan
+        from openpyxl import load_workbook
+
+        def contents(path):
+            book = load_workbook(path, data_only=False)
+            try:
+                return [(sheet.title,
+                         tuple((cell.coordinate, cell.data_type, cell.value)
+                               for cell in sorted(sheet._cells.values(), key=lambda cell: (cell.row, cell.column))
+                               if cell.value is not None),
+                         tuple(sorted(str(area) for area in sheet.merged_cells.ranges)))
+                        for sheet in book.worksheets]
+            finally:
+                book.close()
+
+        workbook = Path(workbook).resolve()
+        before_hash = sha256(workbook)
+        before_contents = contents(workbook)
+        staged = None
+        try:
+            with tempfile.NamedTemporaryFile(prefix=".invoice-format-", suffix=".xlsx",
+                                             dir=workbook.parent, delete=False) as handle:
+                staged = Path(handle.name)
+            shutil.copy2(workbook, staged)
+            if sha256(staged) != before_hash:
+                raise ValueError("工作簿在准备排版时发生变化，请重新预览")
+            with tempfile.TemporaryDirectory(prefix="invoice-layout-") as temporary:
+                plan_file = Path(temporary) / "plan.json"
+                plan_file.write_text(json.dumps(layout_plan(staged), ensure_ascii=False), encoding="utf-8")
+                self._run(resource_root() / "resources/run_excel.ps1", [
+                    "-EngineScript", str(script), "-WorkbookInput", str(staged),
+                    "-LayoutPlanFile", str(plan_file),
+                ], timeout=480)
+            if contents(staged) != before_contents:
+                raise ValueError("排版副本的单元格内容或合并结构发生变化，已停止替换工作簿")
+            if sha256(workbook) != before_hash:
+                raise ValueError("工作簿在排版期间被修改，已停止替换；请重新预览")
+            os.replace(staged, workbook)
+        finally:
+            if staged is not None and staged.exists():
+                staged.unlink()
 
     def export_pdf(self, workbook, plan_file, output_dir, report_file):
         self._run(resource_root() / "resources/export_pdf.ps1", [
@@ -416,9 +456,9 @@ class Controller:
                 finally:
                     writer_plan.workbook.close()
                 result["completed"].append("两表重填已在上次完成" if skip_write else "清空旧明细并重填两表")
-                self.progress("正在应用字体并通过 Excel 重算…")
+                self.progress("正在应用字体、调整单元格完整显示并通过 Excel 重算…")
                 self.excel.apply(self.engine_dir / "apply_mixed_fonts_excel.ps1", preview.workbook)
-                result["completed"].append("字体与重算")
+                result["completed"].append("字体、完整显示排版与重算")
                 self.progress("正在逐票核对金额与两张表的总计…")
                 totals_path = scratch / "totals.json"
                 result["totals"] = self._invoke("totals", ["--input", str(preview.workbook), "--output", str(totals_path)], totals_path)
