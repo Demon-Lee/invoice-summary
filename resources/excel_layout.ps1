@@ -101,6 +101,21 @@ function Set-InvoiceColumnPoints($column, [double]$points, [string]$context) {
     }
 }
 
+function Set-InvoiceRowMinimumPoints($row, [double]$minimum) {
+    # Excel rounds row heights to its native display grid. A single write can
+    # round below the measured minimum; read it back and round upward until
+    # it actually fits, or until the permitted row-height ceiling is reached.
+    # Keep the real capacity check in the caller for vertically merged cells.
+    $minimum = [Math]::Min(409.0, $minimum)
+    $requested = $minimum
+    while ($true) {
+        $row.RowHeight = $requested
+        $actual = [double]$row.RowHeight
+        if ($actual + 0.05 -ge $minimum -or $requested -ge 409.0) { return }
+        $requested = [Math]::Min(409.0, [Math]::Max($requested + 1.0, [Math]::Ceiling($minimum) + 1.0))
+    }
+}
+
 function Copy-InvoiceProbe($source, $probe) {
     $used = $target = $copied = $null
     try {
@@ -315,12 +330,16 @@ function Fit-InvoiceContent($book, $item, $formulaSnapshot = $null) {
                     $row = $sheetRows.Item($firstRow + $offset)
                     $height = [double]$row.RowHeight
                     $added = [Math]::Min($missing, 409.0 - $height)
-                    if ($added -gt 0) { $row.RowHeight = [Math]::Min(409.0, $height + $added) }
+                    if ($added -gt 0) { Set-InvoiceRowMinimumPoints $row ($height + $added) }
                     $missing = $required - [double]$area.Height
                     Release-InvoiceLayoutCom $row
                     $row = $null
                 }
-                if ($missing -gt 0.05) { throw ($context + ': content cannot fit within the Excel 409 pt row limit.') }
+                if ($missing -gt 0.05) {
+                    throw ([string]::Format([Globalization.CultureInfo]::InvariantCulture,
+                        '{0}: content needs {1:0.##} pt; available height is {2:0.##} pt after reaching row-height capacity (409 pt per row).',
+                        @($context, $required, [double]$area.Height)))
+                }
                 if ([bool]$worksheetFunctions.IsError($cell)) { throw ($context + ': cell contains an Excel error.') }
                 $value = $cell.Value2
                 if ($null -ne $value -and $value -isnot [string] -and $value -isnot [bool] -and [string]$cell.Text -match '^#+$') {
