@@ -63,7 +63,8 @@ def prepare(directory, preserve):
     old = versions[1] if len(versions) > 1 and versions[1] != versions[0] else None
     store = EngineStore(target, bundled)
     store._activate({"active": versions[0], "previous": old})
-    if (preserve / "signatures" / "config.json").is_file():
+    if (preserve / "signatures").is_dir():
+        # Copy raw files first; migration/discovery runs only in the new build.
         SignatureStore(preserve).copy_to(directory)
     return {"version": versions[0], "origin": origin, "directory": str(target), "previous": old}
 

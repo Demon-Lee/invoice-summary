@@ -1,4 +1,4 @@
-"""Native output-directory chooser; no files are created by this dialog."""
+"""Output chooser with a synchronized portable signature-library summary."""
 import tkinter as tk
 from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
@@ -52,18 +52,31 @@ def choose_export_directory(root, workbook, signature_store):
             labels = {item["id"]: item["label"] for item in state["items"]}
             assigned = [(sheet, label, labels[state["bindings"][key]]) for key, sheet, label in SLOTS
                         if state["bindings"].get(key)]
-            available = bool(assigned)
+            attention = state.get("attention", {})
+            available = bool(assigned or attention)
             was_disabled = checkbox.instate(("disabled",))
-            checkbox.configure(state="normal" if available else "disabled")
-            if initial or not available or was_disabled:
+            if initial or (was_disabled and available):
                 include.set(available)
-            signature_summary.configure(text="\n".join(f"{sheet} · {role}：{label}" for sheet, role, label in assigned)
-                                        if available else "请在签名管理中导入图片，并为签字位置选择标签。")
+            # A refresh must not turn a requested signed export into unsigned.
+            checkbox.configure(state="normal" if available or include.get() else "disabled")
+            summary = [f"{sheet} · {role}：{label}" for sheet, role, label in assigned]
+            if attention:
+                affected = [f"{sheet} · {role}" for key, sheet, role in SLOTS if key in attention]
+                summary.append("需要重新确认：" + "、".join(affected) + "。请打开签名管理，重新选择标签或明确选择不使用签名。")
+            issues = state.get("issues", [])
+            summary.extend(issues[:3])
+            if len(issues) > 3:
+                summary.append(f"另有 {len(issues) - 3} 项，请在签名管理中查看。")
+            if not available and not attention:
+                summary.insert(0, "请放入签名图片，并在签名管理中为签字位置选择标签。")
+            signature_summary.configure(text="\n".join(summary), foreground="#946522" if attention or issues else "#273d5d")
         except (OSError, ValueError) as exc:
             displayed_revision = None
-            include.set(False)
-            checkbox.configure(state="disabled")
-            signature_summary.configure(text="签名设置不可用：" + str(exc))
+            if initial:
+                include.set(True)
+            checkbox.configure(state="normal")
+            signature_summary.configure(text="签名设置暂不可用：" + str(exc)
+                                        + "\n请重试或进入签名管理；如需无签名导出，请明确取消勾选。", foreground="#946522")
     def manage():
         open_signature_manager(dialog, signature_store)
         refresh_signatures()
@@ -73,6 +86,8 @@ def choose_export_directory(root, workbook, signature_store):
     buttons.grid(row=6, column=0, sticky="e")
     def accept():
         try:
+            if include.get() and displayed_revision is None:
+                raise ValueError("签名设置尚未读取完成，请刷新并核对标签后再导出。")
             snapshot = signature_store.snapshot(expected_revision=displayed_revision) if include.get() else None
             if snapshot is not None and not any(snapshot["bindings"].values()):
                 raise ValueError("签字位置已变化，请在签名管理中重新选择标签。")
