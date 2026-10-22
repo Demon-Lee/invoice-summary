@@ -84,6 +84,63 @@ def _cell_chars(page, box, name, address):
     return chars
 
 
+def _printed_columns(pdf, sheet, native):
+    """Calibrate printer column metrics from borders plus exact header text.
+
+    Excel's screen geometry can differ from the printed column widths. Never
+    enlarge text tolerances to cover this: identify physical header cells and
+    require every header to match before mapping their column boundaries.
+    """
+    identity = lambda value: value
+    page = pdf.pages[0]
+    headers = []
+    for cell in native.get('cells', []):
+        if (not isinstance(cell, Mapping) or not isinstance(cell.get('address'), str)
+                or cell.get('page') != 1):
+            continue
+        row, column = coordinate_to_tuple(cell['address'])
+        if row == sheet['header_row']:
+            headers.append((column, cell, _box(cell.get('box'), page, sheet['name'], cell['address'])))
+    headers.sort(key=lambda item: item[0])
+    if len(headers) < 7 or any(abs(a[2][2] - b[2][0]) > .1 for a, b in zip(headers, headers[1:])):
+        return identity
+    middle = (headers[0][2][1] + headers[0][2][3]) / 2
+    xs = sorted(float(edge['x0']) for edge in page.edges
+                if abs(edge['x1'] - edge['x0']) < .1 and edge.get('height', 0) > 5
+                and edge['top'] <= middle <= edge['bottom'])
+    clusters = []
+    for value in xs:
+        if not clusters or value - clusters[-1][-1] > .8:
+            clusters.append([value])
+        else:
+            clusters[-1].append(value)
+    printed = [sum(group) / len(group) for group in clusters]
+    if len(printed) != len(headers) + 1:
+        return identity
+    for index, (_, cell, box) in enumerate(headers):
+        chars = [c for c in page.chars
+                 if printed[index] <= (c['x0'] + c['x1']) / 2 <= printed[index + 1]
+                 and box[1] <= (c['top'] + c['bottom']) / 2 <= box[3]]
+        actual = _normalized(extract_text(chars, x_tolerance=1, y_tolerance=2) or '')
+        if actual != _normalized(cell.get('text', '')):
+            return identity
+    logical = [headers[0][2][0]] + [item[2][2] for item in headers]
+    if any(right <= left for left, right in zip(logical, logical[1:])):
+        return identity
+
+    def transform(value):
+        # Outside verified header columns, correct only the known origin.
+        # Side columns keep their native widths; never extrapolate a header's
+        # printer scale into independently rounded, uncalibrated columns.
+        if value <= logical[0]:
+            return value + printed[0] - logical[0]
+        if value >= logical[-1]:
+            return value + printed[-1] - logical[-1]
+        index = bisect_right(logical, value) - 1
+        return printed[index] + (value - logical[index]) * (printed[index + 1] - printed[index]) / (logical[index + 1] - logical[index])
+    return transform
+
+
 def validate_pdf_layout(pdf, sheet, native, source):
     """Validate native coverage and every expected PDF cell occurrence.
 
@@ -127,6 +184,7 @@ def validate_pdf_layout(pdf, sheet, native, source):
     cells = native.get("cells")
     if not isinstance(cells, list):
         _error(name, "缺少逐单元格排版证明")
+    printed_x = _printed_columns(pdf, sheet, native)
     seen = set()
     used_chars = {}
     for cell in cells:
@@ -141,7 +199,8 @@ def validate_pdf_layout(pdf, sheet, native, source):
         page = pdf.pages[page_number - 1]
         if page.rotation or any(abs(a - b) > 0.1 for a, b in zip(page.bbox, (0, 0, page.width, page.height))):
             _error(name, f"第 {page_number} 页旋转或坐标原点不受支持")
-        box = _box(cell.get("box"), page, name, address)
+        left, top, right, bottom = _box(cell.get("box"), page, name, address)
+        box = _box((printed_x(left), top, printed_x(right), bottom), page, name, address)
         display = cell.get("text")
         orientation = cell.get("orientation")
         if (not isinstance(display, str) or isinstance(orientation, bool)

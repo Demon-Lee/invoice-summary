@@ -102,15 +102,15 @@ function Set-InvoiceColumnPoints($column, [double]$points, [string]$context) {
 }
 
 function Set-InvoiceRowMinimumPoints($row, [double]$minimum) {
-    # Excel rounds row heights to its native display grid. A single write can
-    # round below the measured minimum; read it back and round upward until
-    # it actually fits, or until the permitted row-height ceiling is reached.
+    # Verify geometric Height, the same property used for merged-area checks
+    # and PDF coordinates. RowHeight is the writable setting and can report a
+    # slightly different rounded value; it cannot prove actual content space.
     # Keep the real capacity check in the caller for vertically merged cells.
     $minimum = [Math]::Min(409.0, $minimum)
     $requested = $minimum
     while ($true) {
         $row.RowHeight = $requested
-        $actual = [double]$row.RowHeight
+        $actual = [double]$row.Height
         if ($actual + 0.05 -ge $minimum -or $requested -ge 409.0) { return }
         $requested = [Math]::Min(409.0, [Math]::Max($requested + 1.0, [Math]::Ceiling($minimum) + 1.0))
     }
@@ -204,6 +204,7 @@ function Fit-InvoiceContent($book, $item, $formulaSnapshot = $null) {
     $rowMinima = @{}
     $columnMinima = @{}
     $numericColumns = @{}
+    $captionAreas = @{}
     $formulaValues = @{}
     $sheetName = [string]$item.name
     foreach ($snapshot in $formulaSnapshot) {
@@ -253,7 +254,7 @@ function Fit-InvoiceContent($book, $item, $formulaSnapshot = $null) {
         # Measure individual numeric cells, never entire template columns:
         # merged titles and footer labels must not inflate numeric widths.
         foreach ($address in @($item.content_cells)) {
-            $cell = $area = $columns = $column = $null
+            $cell = $area = $columns = $column = $caption = $null
             $context = $sheetName + '!' + [string]$address
             try {
                 $cell = $sheet.Range([string]$address)
@@ -269,7 +270,19 @@ function Fit-InvoiceContent($book, $item, $formulaSnapshot = $null) {
                     throw ($context + ': formula is missing from the calculated value snapshot.')
                 }
                 $isNumber = $null -ne $value -and $value -isnot [string] -and $value -isnot [bool]
-                if (-not $isNumber) { continue }
+                if (-not $isNumber) {
+                    $span = $null
+                    if ($null -ne $item.caption_spans) { $span = $item.caption_spans.PSObject.Properties[[string]$address] }
+                    if ($null -ne $span) {
+                        $caption = $sheet.Range([string]$span.Value)
+                        $textWidth = (Measure-InvoiceCell $cell $area $probe 0.0 $true $context $useCapturedValue $value) + 2.0
+                        if ($textWidth -le [double]$caption.Width) {
+                            $cell.WrapText = $false
+                            $captionAreas[[string]$address] = [string]$span.Value
+                        }
+                    }
+                    continue
+                }
                 $columns = $area.Columns
                 $firstColumn = [int]$area.Column
                 $lastColumn = $firstColumn + [int]$columns.Count - 1
@@ -285,6 +298,7 @@ function Fit-InvoiceContent($book, $item, $formulaSnapshot = $null) {
                     Set-InvoiceColumnPoints $column ([double]$column.Width + $missing) $context
                 }
             } finally {
+                Release-InvoiceLayoutCom $caption
                 Release-InvoiceLayoutCom $column
                 Release-InvoiceLayoutCom $columns
                 Release-InvoiceLayoutCom $area
@@ -307,11 +321,15 @@ function Fit-InvoiceContent($book, $item, $formulaSnapshot = $null) {
         # Check every anchor, including ordinary cells, through the same native
         # probe so long unmerged text and merged text share the height proof.
         foreach ($address in @($item.content_cells)) {
-            $cell = $area = $areaRows = $row = $null
+            $cell = $area = $originalArea = $areaRows = $row = $null
             $context = $sheetName + '!' + [string]$address
             try {
                 $cell = $sheet.Range([string]$address)
                 $area = $cell.MergeArea
+                if ($captionAreas.ContainsKey([string]$address)) {
+                    $originalArea = $area
+                    $area = $sheet.Range($captionAreas[[string]$address])
+                }
                 $useCapturedValue = $formulaValues.ContainsKey([string]$address)
                 $value = $cell.Value2
                 if ($useCapturedValue) {
@@ -349,6 +367,7 @@ function Fit-InvoiceContent($book, $item, $formulaSnapshot = $null) {
                 Release-InvoiceLayoutCom $row
                 Release-InvoiceLayoutCom $areaRows
                 Release-InvoiceLayoutCom $area
+                Release-InvoiceLayoutCom $originalArea
                 Release-InvoiceLayoutCom $cell
             }
         }

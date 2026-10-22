@@ -294,6 +294,12 @@ function Get-NativeLayout($application, $worksheet, $pageSetup, $geometry) {
                 $seen[$address] = $true
                 $cell = $worksheet.Range($address)
                 $area = $cell.MergeArea
+                $captionSpan = $null
+                if ($null -ne $geometry.caption_spans) { $captionSpan = $geometry.caption_spans.PSObject.Properties[$address] }
+                if ($null -ne $captionSpan -and -not [bool]$cell.WrapText) {
+                    if (-not [Object]::ReferenceEquals($area, $cell)) { Release-Com $area }
+                    $area = $worksheet.Range([string]$captionSpan.Value)
+                }
                 $areaRows = $area.Rows
                 $areaColumns = $area.Columns
                 $row = [int]$cell.Row

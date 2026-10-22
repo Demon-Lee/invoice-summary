@@ -108,6 +108,21 @@ def sheet_layout(ws):
         end = dimension.max or start
         if start <= last_col and end >= 1 and (dimension.hidden or dimension.width == 0):
             raise ValueError(f"{name} {key} 列被隐藏或宽度为零")
+    # Unmerged template captions intentionally spill into empty neighbours.
+    # Preserve that existing display space without merging or moving cells.
+    main_end = max(c for r, c in cells if r == header)
+    caption_spans = {}
+    for (row, column), cell in cells.items():
+        if (header <= row < footer or column > main_end or cell.data_type not in ('s', 'inlineStr')
+                or cell.alignment.horizontal not in (None, 'left', 'general')
+                or any(cell.coordinate in merge for merge in merges)):
+            continue
+        end = min([main_end] + [c - 1 for r, c in cells if r == row and c > column])
+        for merge in merges:
+            if merge.min_row <= row <= merge.max_row and column < merge.min_col <= end:
+                end = merge.min_col - 1
+        if end > column:
+            caption_spans[cell.coordinate] = f'{cell.coordinate}:{get_column_letter(end)}{row}'
     return {
         "name": name, "header_row": header, "footer_row": footer,
         "last_detail_row": detail_rows[-1], "print_end_row": last_row,
@@ -116,6 +131,7 @@ def sheet_layout(ws):
         "content_cells": [cells[key].coordinate for key in sorted(cells)],
         "columns": columns, "tail_start_row": detail_rows[-1], "tail_end_row": last_row,
         "repeat_start_row": repeat_start, "repeat_end_row": repeat_end,
+        "caption_spans": caption_spans,
     }
 
 
