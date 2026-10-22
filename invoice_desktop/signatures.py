@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import hashlib
+from collections import OrderedDict
 from contextlib import contextmanager
 from functools import wraps
 import io
@@ -30,6 +31,9 @@ _MAX_PIXELS = 24_000_000
 _ID = re.compile(r"[0-9a-f]{32}\Z")
 _HASH = re.compile(r"[0-9a-f]{64}\Z")
 _MUTATIONS = threading.RLock()
+_CACHE_BYTES = 16 * 1024 * 1024
+_CACHE_ENTRIES = 32
+_VALIDATION_ENTRIES = 256
 
 
 def revision(config):
@@ -117,6 +121,9 @@ class SignatureStore:
         self.root = Path(os.path.abspath(Path(application_dir) / "signatures"))
         self.config = self.root / "config.json"
         self._revision = None
+        self._image_cache = OrderedDict()
+        self._image_cache_bytes = 0
+        self._validated = OrderedDict()
 
     @property
     def image_dir(self):
@@ -184,6 +191,43 @@ class SignatureStore:
         if len(data) > _MAX_BYTES:
             raise ValueError("签名图片超过 32 MB，请先缩小图片")
         return data
+
+    def _normalized(self, data, *, size=None):
+        """Reuse pixel work only for the exact bytes just read and hashed."""
+        digest = hashlib.sha256(data).hexdigest()
+        key = (digest, size)
+        if key in self._image_cache:
+            self._image_cache.move_to_end(key)
+            return self._image_cache[key]
+        if size is None:
+            result = _png(data, normalize=True)
+            self._validated[digest] = None
+            self._validated.move_to_end(digest)
+            while len(self._validated) > _VALIDATION_ENTRIES:
+                self._validated.popitem(last=False)
+        else:
+            with Image.open(io.BytesIO(self._normalized(data))) as source:
+                thumbnail = source.convert("RGBA")
+            thumbnail.thumbnail(size, Image.Resampling.LANCZOS)
+            output = io.BytesIO()
+            thumbnail.save(output, format="PNG")
+            result = output.getvalue()
+        if len(result) <= _CACHE_BYTES:
+            self._image_cache[key] = result
+            self._image_cache_bytes += len(result)
+            while (self._image_cache_bytes > _CACHE_BYTES
+                   or len(self._image_cache) > _CACHE_ENTRIES):
+                _, evicted = self._image_cache.popitem(last=False)
+                self._image_cache_bytes -= len(evicted)
+        return result
+
+    def _validate_image(self, data):
+        digest = hashlib.sha256(data).hexdigest()
+        if digest in self._validated:
+            self._validated.move_to_end(digest)
+        else:
+            self._normalized(data)
+        return digest
 
     def _load(self):
         """Read/validate config only; never synchronize or acquire another lock."""
@@ -336,7 +380,7 @@ class SignatureStore:
             data = self._raw_file(self._image_path(item["file"], legacy=True))
             if hashlib.sha256(data).hexdigest() != item["sha256"]:
                 raise ValueError("旧版签名图片指纹不符，原文件已保留，请先恢复或修复旧版配置")
-            _png(data, normalize=True)
+            self._normalized(data)
             filename = f"签名图片/{label}.png"
             path = self._image_path(filename)
             self._available(label, path.name)
@@ -385,8 +429,8 @@ class SignatureStore:
                 if _label(path.stem) != path.stem:
                     raise ValueError("文件名含首尾空格")
                 data = self._raw_file(path)
-                _png(data, normalize=True)  # Validate in memory; retain original bytes on disk.
-                digest = hashlib.sha256(data).hexdigest()
+                # Always read/hash current bytes; unchanged content needs no pixel work.
+                digest = self._validate_image(data)
             except (OSError, ValueError) as exc:
                 issues.append(f"已跳过“{path.name}”：{exc}")
                 continue
@@ -521,7 +565,7 @@ class SignatureStore:
         if source.suffix.lower() not in (".png", ".jpg", ".jpeg"):
             raise ValueError("签名图片仅支持 PNG、JPG、JPEG")
         data = self._raw_file(source)
-        _png(data, normalize=True)
+        self._normalized(data)
         filename = f"签名图片/{label}{source.suffix.lower()}"
         self._available(label, Path(item["file"]).name if item else None)
         item_id = item["id"] if item else uuid.uuid4().hex
@@ -579,12 +623,23 @@ class SignatureStore:
             raise ValueError(f"签名“{item['label']}”图片已改变，请刷新列表后重新确认")
         return data
 
-    def _bytes(self, item):
-        return _png(self._original_bytes(item), normalize=True)
+    def _bytes(self, item, *, size=None):
+        return self._normalized(self._original_bytes(item), size=size)
 
     @_serialized
-    def image_bytes(self, item_id):
-        return self._bytes(self._item(self._read(), item_id))
+    def image_bytes(self, item_id, expected_revision=None, *, size=None):
+        if size is not None:
+            if (not isinstance(size, (tuple, list)) or len(size) != 2
+                    or any(type(n) is not int or not 1 <= n <= 1024 for n in size)):
+                raise ValueError("签名预览尺寸无效")
+            size = tuple(size)
+        # A preview reads the shown config and selected original only. Discovery
+        # remains in read/mutators/snapshot; export never trusts this UI shortcut.
+        config, _ = self._load()
+        if config["version"] == 1:
+            config = self._read()
+        self._expected(config, expected_revision)
+        return self._bytes(self._item(config, item_id), size=size)
 
     @_serialized
     def snapshot(self, expected_revision=None):

@@ -1,25 +1,20 @@
 """Modal management of the portable signature library."""
 
-from io import BytesIO
-import os
 from pathlib import Path
+from queue import Empty
 import tkinter as tk
 from tkinter import filedialog, messagebox, simpledialog, ttk
 
-from PIL import Image, ImageTk
+from PIL import ImageTk
 
 from .signatures import SLOTS
+from .signature_tasks import SignatureRefreshError, SignatureTasks
 from .ui import FONT, PALETTE, surface
 from .ui_widgets import AutoHideScrollbar
 
 
 def open_signature_manager(parent, store):
     """Open a blocking manager; all successful changes are saved immediately."""
-    try:
-        initial = store.read()
-    except Exception as exc:
-        messagebox.showerror("签名库", _error_text(exc), parent=parent)
-        return
     previous_grab = parent.grab_current()
     previous_status = previous_grab.grab_status() if previous_grab else None
     dialog = tk.Toplevel(parent)
@@ -27,13 +22,13 @@ def open_signature_manager(parent, store):
     dialog.title("签名库与角色设置")
     dialog.configure(bg=PALETTE["background"])
     dialog.transient(parent.winfo_toplevel())
-    manager = _SignatureManager(dialog, store, initial)
+    manager = _SignatureManager(dialog, store)
     width = min(820, max(400, dialog.winfo_screenwidth() - 80))
     height = min(700, max(360, dialog.winfo_screenheight() - 100))
     dialog.geometry(f"{width}x{height}")
     dialog.minsize(min(600, width), min(440, height))
-    dialog.protocol("WM_DELETE_WINDOW", dialog.destroy)
-    dialog.bind("<Escape>", lambda event: dialog.destroy())
+    dialog.protocol("WM_DELETE_WINDOW", manager.close)
+    dialog.bind("<Escape>", lambda event: manager.close())
     try:
         dialog.deiconify()
         dialog.wait_visibility()
@@ -41,6 +36,7 @@ def open_signature_manager(parent, store):
         manager.listbox.focus_set()
         parent.wait_window(dialog)
     finally:
+        manager.stop_tasks()
         if dialog.winfo_exists():
             dialog.destroy()
         if previous_grab is not None:
@@ -64,16 +60,25 @@ def _error_text(exc):
 
 
 class _SignatureManager:
-    def __init__(self, dialog, store, initial):
+    def __init__(self, dialog, store):
         self.dialog = dialog
         self.store = store
-        self.data = initial
+        self.data = {"items": [], "bindings": {}}
         self.items = []
         self.photo = None
+        self.photo_key = None
         self.selectors = {}
         self.role_labels = {}
         self.selector_ids = [None]
         self.refreshing = False
+        self.busy = False
+        self.needs_refresh = False
+        self.closed = False
+        self.tasks = SignatureTasks(store)
+        self.control_request = None
+        self.control_kind = None
+        self.preview_request = None
+        self.poll_id = None
         frame = ttk.Frame(dialog, padding=12)
         frame.pack(fill="both", expand=True)
         frame.rowconfigure(1, weight=1)
@@ -110,12 +115,12 @@ class _SignatureManager:
         # Use the root's existing rounded surfaces; do not rebuild shared theme images.
         import_button = ttk.Button(toolbar, text="导入签名…", command=self.import_image, style="ExecuteAction.TButton", cursor="hand2")
         folder_button = ttk.Button(toolbar, text="打开签名文件夹", command=self.open_folder, style="ExportAction.TButton", cursor="hand2")
-        refresh_button = ttk.Button(toolbar, text="刷新列表", command=lambda: self.run(lambda: None), style="ExportAction.TButton", cursor="hand2")
+        refresh_button = self.refresh_button = ttk.Button(toolbar, text="刷新列表", command=self.load, style="ExportAction.TButton", cursor="hand2")
         self.rename_button = ttk.Button(toolbar, text="重命名…", command=self.rename, style="ExportAction.TButton")
         self.replace_button = ttk.Button(toolbar, text="替换图片…", command=self.replace, style="ExportAction.TButton")
         self.delete_button = ttk.Button(toolbar, text="删除…", command=self.delete, style="ExportAction.TButton")
-        toolbar_buttons = (import_button, folder_button, refresh_button, self.rename_button, self.replace_button, self.delete_button)
-        for index, button in enumerate(toolbar_buttons):
+        self.toolbar_buttons = (import_button, folder_button, refresh_button, self.rename_button, self.replace_button, self.delete_button)
+        for index, button in enumerate(self.toolbar_buttons):
             button.grid(row=index // 2, column=index % 2, sticky="ew", padx=(0, 6), pady=(0, 6))
         toolbar.columnconfigure(0, weight=1)
         toolbar.columnconfigure(1, weight=1)
@@ -133,9 +138,14 @@ class _SignatureManager:
         list_scroll.attach(self.listbox, list_panel)
         self.listbox.configure(yscrollcommand=list_scroll.set)
         self.listbox.bind("<<ListboxSelect>>", self.show_selected)
-        self.preview = ttk.Label(library, text="请选择签名查看图片", anchor="center",
+        preview_host = ttk.Frame(library, style="Surface.TFrame", height=200)
+        preview_host.grid(row=3, column=0, sticky="ew", pady=(8, 0))
+        preview_host.grid_propagate(False)
+        preview_host.rowconfigure(0, weight=1)
+        preview_host.columnconfigure(0, weight=1)
+        self.preview = ttk.Label(preview_host, text="正在读取签名库…", anchor="center",
                                  style="Surface.TLabel", padding=10, wraplength=230)
-        self.preview.grid(row=3, column=0, sticky="ew", pady=(8, 0))
+        self.preview.grid(row=0, column=0, sticky="nsew")
         self.notice = ttk.Label(library, style="Surface.TLabel", foreground="#946522", justify="left", wraplength=550)
         self.notice.grid(row=4, column=0, sticky="ew", pady=(6, 0))
         roles = surface(body, padding=12)
@@ -174,9 +184,13 @@ class _SignatureManager:
             self.listbox.bind(sequence, self._scroll_library)
         footer = ttk.Frame(frame)
         footer.grid(row=2, column=0, sticky="ew", pady=(10, 0))
-        ttk.Label(footer, text="修改后自动保存", foreground=PALETTE["muted"]).pack(side="left")
-        ttk.Button(footer, text="关闭", command=dialog.destroy, style="ExportAction.TButton", cursor="hand2").pack(side="right")
-        self.refresh(initial)
+        self.status = ttk.Label(footer, text="正在读取签名库…", foreground=PALETTE["muted"])
+        self.status.pack(side="left")
+        self.close_button = ttk.Button(footer, text="关闭", command=self.close, style="ExportAction.TButton", cursor="hand2")
+        self.close_button.pack(side="right")
+        dialog.bind("<Destroy>", self._on_destroy, add="+")
+        self.load()
+        self.poll_id = dialog.after(40, self._poll)
 
     @staticmethod
     def _wheel_units(event):
@@ -202,23 +216,36 @@ class _SignatureManager:
 
     def selected_id(self):
         selected = self.listbox.curselection()
-        return self.items[selected[0]]["id"] if selected else None
+        return self.items[selected[0]]["id"] if selected and selected[0] < len(self.items) else None
 
-    def refresh(self, data=None, selected=None):
-        if data is None:
-            data = self.store.read()
+    def refresh(self, data, selected=None):
+        """Apply a completed read on Tk's thread without rebuilding unchanged rows."""
         if selected is None:
             selected = self.selected_id()
+        previous_selection = self.selected_id()
+        list_position = self.listbox.yview()[0]
+        body_position = self.canvas.yview()[0]
         self.refreshing = True
         try:
             self.data = data
-            self.items = list(data["items"])
-            self.listbox.delete(0, tk.END)
-            for index, item in enumerate(self.items):
-                self.listbox.insert(tk.END, item["label"])
-                if item["id"] == selected:
-                    self.listbox.selection_set(index)
-                    self.listbox.see(index)
+            items = list(data["items"])
+            changed = [(item["id"], item["label"]) for item in items] != [
+                (item["id"], item["label"]) for item in self.items]
+            self.items = items
+            if changed:
+                self.listbox.delete(0, tk.END)
+                for item in self.items:
+                    self.listbox.insert(tk.END, item["label"])
+            if changed or selected != previous_selection:
+                self.listbox.selection_clear(0, tk.END)
+                for index, item in enumerate(self.items):
+                    if item["id"] == selected:
+                        self.listbox.selection_set(index)
+                        if selected != previous_selection:
+                            self.listbox.see(index)
+                        break
+                if selected == previous_selection:
+                    self.listbox.yview_moveto(list_position)
             labels = [item["label"] for item in self.items]
             attention = data.get("attention", {})
             warnings = list(data.get("issues", []))
@@ -242,39 +269,138 @@ class _SignatureManager:
                 empty += " "
             self.selector_ids = [None] + [item["id"] for item in self.items]
             for key, combo in self.selectors.items():
-                combo.configure(values=[empty] + labels)
+                if changed or not combo.cget("values"):
+                    combo.configure(values=[empty] + labels)
                 bound = data["bindings"].get(key)
                 combo.current(self.selector_ids.index(bound) if bound in self.selector_ids else 0)
             self.show_selected()
         finally:
             self.refreshing = False
+            self.canvas.yview_moveto(body_position)
 
     def show_selected(self, event=None):
+        if self.busy or self.closed:
+            return
         item_id = self.selected_id()
-        for button in (self.rename_button, self.replace_button, self.delete_button):
-            button.configure(state="normal" if item_id else "disabled", cursor="hand2" if item_id else "arrow")
-        self.photo = None
-        self.preview.configure(image="", text="请选择签名查看图片" if self.items else "尚未导入签名")
+        self._update_controls()
+        self.tasks.cancel_preview()
+        self.preview_request = None
+        item = next((item for item in self.items if item["id"] == item_id), None)
+        key = (item_id, item["sha256"]) if item else None
+        if key != self.photo_key or self.photo is None:
+            self.photo = None
+            self.photo_key = None
+            self.preview.configure(image="", text=("正在读取签名图片…" if item_id else
+                "请选择签名查看图片" if self.items else "尚未导入签名"))
         if item_id:
-            try:
-                with Image.open(BytesIO(self.store.image_bytes(item_id))) as source:
-                    thumbnail = source.convert("RGBA")
-                thumbnail.thumbnail((280, 180), Image.Resampling.LANCZOS)
-                self.photo = ImageTk.PhotoImage(thumbnail, master=self.dialog)
-                self.preview.configure(image=self.photo, text="")
-            except Exception:
-                self.preview.configure(text="图片无法读取，请替换图片或删除此签名。")
+            request = self.tasks.submit("preview", item_id, self.store.revision(self.data))
+            self.preview_request = (request, key)
 
-    def run(self, operation, selected=None):
-        try:
-            result = operation()
-            self.refresh(selected=result if isinstance(result, str) else selected)
-        except Exception as exc:
-            messagebox.showerror("签名库", _error_text(exc), parent=self.dialog)
+    def _update_controls(self):
+        for button in self.toolbar_buttons:
+            disabled = self.busy or (self.needs_refresh and button is not self.refresh_button)
+            button.configure(state="disabled" if disabled else "normal")
+        self.listbox.configure(state="disabled" if self.busy else "normal")
+        for combo in self.selectors.values():
+            combo.configure(state="disabled" if self.busy or self.needs_refresh else "readonly")
+        enabled = bool(self.selected_id()) and not self.busy and not self.needs_refresh
+        for button in (self.rename_button, self.replace_button, self.delete_button):
+            button.configure(state="normal" if enabled else "disabled", cursor="hand2" if enabled else "arrow")
+        self.close_button.configure(state="disabled" if self.control_kind == "mutate" else "normal")
+
+    def _begin(self, kind, *args, selected=None, action=None, path=None, **kwargs):
+        if self.busy or self.closed:
+            return
+        self.busy = True
+        self.control_kind = kind
+        self.tasks.cancel_preview()
+        self.preview_request = None
+        self._update_controls()
+        self.status.configure(text="正在保存签名库…" if kind == "mutate" else "正在处理签名库…")
+        request = self.tasks.submit(kind, *args, **kwargs)
+        self.control_request = (request, selected, action, path)
+
+    def load(self):
+        self._begin("read", selected=self.selected_id())
+
+    def run(self, method, *args, selected=None, **kwargs):
+        self._begin("mutate", method, *args, selected=selected, **kwargs)
+
+    def _poll(self):
+        self.poll_id = None
+        if self.closed:
+            return
+        while not self.closed:
             try:
-                self.refresh(selected=selected)
-            except Exception:
+                request, kind, value, error = self.tasks.results.get_nowait()
+            except Empty:
+                break
+            if kind == "preview":
+                if not self.preview_request or request != self.preview_request[0]:
+                    continue
+                _, key = self.preview_request
+                self.preview_request = None
+                if error:
+                    self.photo = self.photo_key = None
+                    self.preview.configure(image="", text="图片无法读取，请刷新列表、替换图片或删除此签名。")
+                elif self.photo is None or key != self.photo_key:
+                    try:
+                        self.photo = ImageTk.PhotoImage(value, master=self.dialog)
+                        self.photo_key = key
+                        self.preview.configure(image=self.photo, text="")
+                    except (OSError, tk.TclError):
+                        self.photo = self.photo_key = None
+                        self.preview.configure(image="", text="图片无法显示，请刷新列表或替换图片。")
+                continue
+            if not self.control_request or request != self.control_request[0]:
+                continue
+            _, selected, action, path = self.control_request
+            self.control_request = None
+            self.control_kind = None
+            self.busy = False
+            self.needs_refresh = error is not None
+            self._update_controls()
+            if error:
                 self.refresh(self.data, selected=selected)
+                self.status.configure(text="签名已保存，请刷新列表核对。" if isinstance(error, SignatureRefreshError)
+                                      else "操作未完成，请刷新列表核对。")
+                messagebox.showerror("签名库", _error_text(error), parent=self.dialog)
+                continue
+            self.status.configure(text="修改后自动保存")
+            if kind == "mutate":
+                data, result = value
+                selected = result if isinstance(result, str) else selected
+            else:
+                data = value
+            self.refresh(data, selected=selected)
+            if action:
+                self._confirm_change(action, selected, path)
+        if not self.closed:
+            self.poll_id = self.dialog.after(40, self._poll)
+
+    def _on_destroy(self, event):
+        if event.widget is self.dialog:
+            self.stop_tasks()
+
+    def stop_tasks(self):
+        if self.closed:
+            return
+        self.closed = True
+        if self.poll_id is not None:
+            try:
+                self.dialog.after_cancel(self.poll_id)
+            except tk.TclError:
+                pass
+            self.poll_id = None
+        self.control_request = self.preview_request = None
+        self.tasks.close()
+
+    def close(self):
+        if self.control_kind == "mutate":
+            self.status.configure(text="正在保存签名库，请稍候再关闭…")
+            return
+        self.stop_tasks()
+        self.dialog.destroy()
 
     def choose_image(self):
         return filedialog.askopenfilename(parent=self.dialog, title="选择签名图片",
@@ -282,11 +408,7 @@ class _SignatureManager:
                        ("JPEG 图片", "*.jpg *.jpeg")])
 
     def open_folder(self):
-        try:
-            self.refresh()
-            os.startfile(self.store.image_dir)
-        except (OSError, ValueError) as exc:
-            messagebox.showerror("签名文件夹", _error_text(exc), parent=self.dialog)
+        self._begin("folder", selected=self.selected_id())
 
     def ask_label(self, title, initialvalue=""):
         try:
@@ -303,7 +425,7 @@ class _SignatureManager:
             return
         label = self.ask_label("命名签名", Path(path).stem)
         if label is not None:
-            self.run(lambda: self.store.import_image(label, path, expected_revision=self.store.revision(self.data)))
+            self.run("import_image", label, path, expected_revision=self.store.revision(self.data))
 
     def rename(self):
         item_id = self.selected_id()
@@ -312,18 +434,12 @@ class _SignatureManager:
         item = next(item for item in self.items if item["id"] == item_id)
         label = self.ask_label("重命名签名", item["label"])
         if label is not None:
-            self.run(lambda: self.store.rename(item_id, label, expected_revision=self.store.revision(self.data)), item_id)
+            self.run("rename", item_id, label, selected=item_id,
+                     expected_revision=self.store.revision(self.data))
 
     def affected_roles(self, item_id):
         return [f"{sheet} · {label}" for key, sheet, label in SLOTS
                 if self.data["bindings"].get(key) == item_id]
-
-    def fresh_revision(self, item_id):
-        fresh = self.store.read()
-        self.refresh(fresh, selected=item_id)
-        if not any(item["id"] == item_id for item in self.items):
-            raise ValueError("此签名已被其他窗口删除，请重新选择。")
-        return self.store.revision(fresh)
 
     def replace(self):
         item_id = self.selected_id()
@@ -332,38 +448,38 @@ class _SignatureManager:
         path = self.choose_image()
         if not path:
             return
-        try:
-            revision = self.fresh_revision(item_id)
-        except Exception as exc:
-            messagebox.showerror("签名库", _error_text(exc), parent=self.dialog)
-            return
-        roles = self.affected_roles(item_id)
-        if roles and not messagebox.askyesno("替换签名图片",
-                "以下角色正在使用此签名：\n" + "、".join(roles) + "\n\n替换后这些角色将使用新图片。是否继续？",
-                parent=self.dialog):
-            return
-        label = next(item["label"] for item in self.items if item["id"] == item_id)
-        self.run(lambda: self.store.import_image(label, path, item_id=item_id,
-                                                 expected_revision=revision), item_id)
+        self._begin("read", selected=item_id, action="replace", path=path)
 
     def delete(self):
         item_id = self.selected_id()
         if not item_id:
             return
-        try:
-            revision = self.fresh_revision(item_id)
-        except Exception as exc:
-            messagebox.showerror("签名库", _error_text(exc), parent=self.dialog)
+        self._begin("read", selected=item_id, action="delete")
+
+    def _confirm_change(self, action, item_id, path):
+        item = next((item for item in self.items if item["id"] == item_id), None)
+        if item is None:
+            messagebox.showerror("签名库", "此签名已被其他窗口删除，请重新选择。", parent=self.dialog)
             return
+        revision = self.store.revision(self.data)
         roles = self.affected_roles(item_id)
+        if action == "replace":
+            if roles and not messagebox.askyesno("替换签名图片",
+                    "以下角色正在使用此签名：\n" + "、".join(roles) + "\n\n替换后这些角色将使用新图片。是否继续？",
+                    parent=self.dialog):
+                return
+            self.run("import_image", item["label"], path, item_id=item_id,
+                     expected_revision=revision, selected=item_id)
+            return
         text = ("以下角色正在使用此签名：\n" + "、".join(roles) + "\n\n删除后将清空这些角色的签名选择。是否删除？"
                 if roles else "是否删除选中的签名？")
         if messagebox.askyesno("删除签名", text, parent=self.dialog):
-            self.run(lambda: self.store.delete(item_id, expected_revision=revision))
+            self.run("delete", item_id, expected_revision=revision)
 
     def assign(self, key):
-        if self.refreshing:
+        if self.refreshing or self.busy or self.needs_refresh:
             return
         index = self.selectors[key].current()
         if 0 <= index < len(self.selector_ids):
-            self.run(lambda: self.store.assign(key, self.selector_ids[index], expected_revision=self.store.revision(self.data)), self.selected_id())
+            self.run("assign", key, self.selector_ids[index],
+                     expected_revision=self.store.revision(self.data), selected=self.selected_id())
