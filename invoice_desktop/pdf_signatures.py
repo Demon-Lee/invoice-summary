@@ -406,7 +406,8 @@ def add_signatures(stage: Path, plan: dict, snapshot: dict) -> dict:
                     if min(iw, ih) < 3:
                         _error(layout["name"], f"“{region['role']}”图片比例过于狭长，适配后无法清晰显示")
                     x0, top, x1, bottom = region["box"]
-                    left = (x0 + x1 - iw) / 2
+                    # The usable box already starts after the colon and padding.
+                    left = x0
                     image_top = (top + bottom - ih) / 2
                     page_height = layout["baseline"][region["page"]]["size"][1]
                     placements.append({**region, "image_id": item_id,

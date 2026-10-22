@@ -7,6 +7,8 @@ from tkinter import filedialog, messagebox, simpledialog, ttk
 from PIL import Image, ImageTk
 
 from .signatures import SLOTS
+from .ui import FONT, PALETTE, surface
+from .ui_widgets import AutoHideScrollbar
 
 
 def open_signature_manager(parent, store):
@@ -21,6 +23,7 @@ def open_signature_manager(parent, store):
     dialog = tk.Toplevel(parent)
     dialog.withdraw()
     dialog.title("签名库与角色设置")
+    dialog.configure(bg=PALETTE["background"])
     dialog.transient(parent.winfo_toplevel())
     manager = _SignatureManager(dialog, store, initial)
     width = min(820, max(400, dialog.winfo_screenwidth() - 80))
@@ -70,63 +73,123 @@ class _SignatureManager:
         self.refreshing = False
         frame = ttk.Frame(dialog, padding=12)
         frame.pack(fill="both", expand=True)
-        frame.rowconfigure(0, weight=1)
+        frame.rowconfigure(1, weight=1)
         frame.columnconfigure(0, weight=1)
-        canvas = tk.Canvas(frame, highlightthickness=0)
-        scroll = ttk.Scrollbar(frame, orient="vertical", command=canvas.yview)
+        header = surface(frame, padding=12)
+        header.grid(row=0, column=0, sticky="ew", pady=(0, 10))
+        ttk.Label(header, text="签名管理", style="Section.TLabel", font=(FONT, 13, "bold")).pack(anchor="w")
+        subtitle = ttk.Label(header, text="统一导入与命名，按签字位置选择标签。", style="Muted.TLabel", wraplength=500)
+        subtitle.pack(anchor="w", fill="x", pady=(4, 0))
+        header.bind("<Configure>", lambda event: subtitle.configure(wraplength=max(160, event.width - 28)))
+        scroll_host = tk.Frame(frame, bg=PALETTE["background"])
+        scroll_host.grid(row=1, column=0, sticky="nsew")
+        scroll_host.rowconfigure(0, weight=1)
+        scroll_host.columnconfigure(0, weight=1)
+        scroll_host.columnconfigure(1, minsize=14)
+        scale = max(0.75, float(dialog.tk.call("tk", "scaling")) / (4 / 3))
+        canvas = self.canvas = tk.Canvas(scroll_host, highlightthickness=0, bd=0,
+                                        bg=PALETTE["background"], yscrollincrement=max(12, round(18 * scale)))
+        scroll = AutoHideScrollbar(scroll_host, command=canvas.yview, background=PALETTE["background"])
+        scroll.attach(canvas, scroll_host)
         canvas.configure(yscrollcommand=scroll.set)
         canvas.grid(row=0, column=0, sticky="nsew")
-        scroll.grid(row=0, column=1, sticky="ns")
-        body = ttk.Frame(canvas, padding=4)
+        body = ttk.Frame(canvas)
         body.columnconfigure(0, weight=1)
         window = canvas.create_window((0, 0), window=body, anchor="nw")
         body.bind("<Configure>", lambda event: canvas.configure(scrollregion=canvas.bbox("all")))
         canvas.bind("<Configure>", lambda event: canvas.itemconfigure(window, width=event.width))
-        introduction = ttk.Label(body, text="导入签名图片并命名，再为各角色选择签名。修改后立即保存。",
-                                 wraplength=550)
-        introduction.grid(row=0, column=0, sticky="ew", pady=(0, 10))
-        toolbar = ttk.Frame(body)
-        toolbar.grid(row=1, column=0, sticky="ew", pady=(0, 8))
-        import_button = ttk.Button(toolbar, text="导入图片…", command=self.import_image)
-        self.rename_button = ttk.Button(toolbar, text="重命名…", command=self.rename)
-        self.replace_button = ttk.Button(toolbar, text="替换图片…", command=self.replace)
-        self.delete_button = ttk.Button(toolbar, text="删除…", command=self.delete)
+        library = surface(body, padding=12)
+        library.columnconfigure(0, weight=1)
+        library.grid(row=0, column=0, sticky="ew")
+        ttk.Label(library, text="签名库", style="Section.TLabel").grid(row=0, column=0, sticky="w", pady=(0, 8))
+        toolbar = ttk.Frame(library, style="Surface.TFrame")
+        toolbar.grid(row=1, column=0, sticky="ew", pady=(0, 4))
+        # Use the root's existing rounded surfaces; do not rebuild shared theme images.
+        import_button = ttk.Button(toolbar, text="导入签名…", command=self.import_image, style="ExecuteAction.TButton", cursor="hand2")
+        self.rename_button = ttk.Button(toolbar, text="重命名…", command=self.rename, style="ExportAction.TButton")
+        self.replace_button = ttk.Button(toolbar, text="替换图片…", command=self.replace, style="ExportAction.TButton")
+        self.delete_button = ttk.Button(toolbar, text="删除…", command=self.delete, style="ExportAction.TButton")
         toolbar_buttons = (import_button, self.rename_button, self.replace_button, self.delete_button)
         for index, button in enumerate(toolbar_buttons):
             button.grid(row=index // 2, column=index % 2, sticky="ew", padx=(0, 6), pady=(0, 6))
         toolbar.columnconfigure(0, weight=1)
         toolbar.columnconfigure(1, weight=1)
-        library = ttk.Frame(body)
-        library.columnconfigure(0, weight=1)
-        library.grid(row=2, column=0, sticky="nsew")
-        self.listbox = tk.Listbox(library, height=8, width=1, exportselection=False)
+        list_panel = surface(library)
+        list_panel.grid(row=2, column=0, sticky="ew")
+        list_panel.rowconfigure(0, weight=1)
+        list_panel.columnconfigure(0, weight=1)
+        list_panel.columnconfigure(1, minsize=14)
+        self.listbox = tk.Listbox(list_panel, height=7, width=1, exportselection=False, bd=0,
+                                 highlightthickness=0, relief="flat", activestyle="none", font=(FONT, 10),
+                                 bg=PALETTE["surface"], fg=PALETTE["text"], selectborderwidth=0,
+                                 selectbackground=PALETTE["selected"], selectforeground=PALETTE["heading"])
         self.listbox.grid(row=0, column=0, sticky="nsew")
-        list_scroll = ttk.Scrollbar(library, orient="vertical", command=self.listbox.yview)
-        list_scroll.grid(row=0, column=1, sticky="ns")
+        list_scroll = AutoHideScrollbar(list_panel, command=self.listbox.yview)
+        list_scroll.attach(self.listbox, list_panel)
         self.listbox.configure(yscrollcommand=list_scroll.set)
         self.listbox.bind("<<ListboxSelect>>", self.show_selected)
         self.preview = ttk.Label(library, text="请选择签名查看图片", anchor="center",
-                                 wraplength=230)
-        self.preview.grid(row=1, column=0, columnspan=2, sticky="ew", pady=(10, 0))
-        roles = ttk.LabelFrame(body, text="PDF 签名角色", padding=10)
-        roles.grid(row=3, column=0, sticky="ew", pady=(14, 0))
+                                 style="Surface.TLabel", padding=10, wraplength=230)
+        self.preview.grid(row=3, column=0, sticky="ew", pady=(8, 0))
+        roles = surface(body, padding=12)
+        roles.grid(row=1, column=0, sticky="ew", pady=(12, 0))
+        ttk.Label(roles, text="签字位置", style="Section.TLabel").grid(row=0, column=0, columnspan=2, sticky="w", pady=(0, 6))
         roles.columnconfigure(1, weight=1)
+        style = ttk.Style(dialog)
+        style.configure("Signature.TCombobox", font=(FONT, 10), padding=(8, 6),
+                        foreground=PALETTE["text"], fieldbackground=PALETTE["surface"],
+                        background=PALETTE["surface"], bordercolor=PALETTE["line"],
+                        lightcolor=PALETTE["line"], darkcolor=PALETTE["line"], arrowcolor=PALETTE["blue"])
+        style.map("Signature.TCombobox", fieldbackground=[("readonly", PALETTE["surface"])],
+                  bordercolor=[("focus", "#8caff7"), ("active", "#8caff7")])
+        wheel_events = ("<MouseWheel>", "<Shift-MouseWheel>", "<Button-4>", "<Button-5>")
         for index, (key, sheet, label) in enumerate(SLOTS):
-            ttk.Label(roles, text=f"{sheet} · {label}").grid(row=index * 2, column=0, columnspan=2, sticky="w", pady=(5, 0))
-            combo = ttk.Combobox(roles, state="readonly", width=1)
-            combo.grid(row=index * 2 + 1, column=0, columnspan=2, sticky="ew", pady=(2, 5))
+            ttk.Label(roles, text=f"{sheet} · {label}", style="Surface.TLabel").grid(row=index * 2 + 1, column=0, columnspan=2, sticky="w", pady=(5, 0))
+            combo = ttk.Combobox(roles, state="readonly", width=1, style="Signature.TCombobox")
+            combo.grid(row=index * 2 + 2, column=0, columnspan=2, sticky="ew", pady=(2, 5))
             combo.bind("<<ComboboxSelected>>", lambda event, slot=key: self.assign(slot))
+            for sequence in wheel_events:
+                # Widget binding runs before TCombobox's wheel-to-change class binding.
+                combo.bind(sequence, self._scroll_body)
             self.selectors[key] = combo
         roles.columnconfigure(0, weight=1)
         note = ttk.Label(body, text="同一签名可用于多个角色；未选择的角色不会添加图片。",
                          wraplength=550)
-        note.grid(row=4, column=0, sticky="ew", pady=(10, 0))
+        note.grid(row=2, column=0, sticky="ew", pady=(10, 4))
         def wrap_text(event):
-            for label in (introduction, note, self.preview):
-                label.configure(wraplength=max(100, event.width - 16))
+            for label in (note, self.preview):
+                label.configure(wraplength=max(100, event.width - 40))
         body.bind("<Configure>", wrap_text, add="+")
-        ttk.Button(frame, text="关闭", command=dialog.destroy).grid(row=1, column=0, sticky="e", pady=(10, 0))
+        for sequence in wheel_events:
+            dialog.bind(sequence, self._scroll_body, add="+")
+            self.listbox.bind(sequence, self._scroll_library)
+        footer = ttk.Frame(frame)
+        footer.grid(row=2, column=0, sticky="ew", pady=(10, 0))
+        ttk.Label(footer, text="修改后自动保存", foreground=PALETTE["muted"]).pack(side="left")
+        ttk.Button(footer, text="关闭", command=dialog.destroy, style="ExportAction.TButton", cursor="hand2").pack(side="right")
         self.refresh(initial)
+
+    @staticmethod
+    def _wheel_units(event):
+        number = getattr(event, "num", None)
+        if number in (4, 5):
+            return -1 if number == 4 else 1
+        delta = getattr(event, "delta", 0)
+        return (-int(delta / 120) if abs(delta) >= 120 else (-1 if delta > 0 else 1)) if delta else 0
+
+    def _scroll_body(self, event):
+        units = self._wheel_units(event)
+        if units:
+            self.canvas.yview_scroll(units * 3, "units")
+        return "break"
+
+    def _scroll_library(self, event):
+        units = self._wheel_units(event)
+        first, last = self.listbox.yview()
+        if units and ((units < 0 and first > 0) or (units > 0 and last < 1)):
+            self.listbox.yview_scroll(units * 3, "units")
+            return "break"
+        return self._scroll_body(event)
 
     def selected_id(self):
         selected = self.listbox.curselection()
@@ -163,7 +226,7 @@ class _SignatureManager:
     def show_selected(self, event=None):
         item_id = self.selected_id()
         for button in (self.rename_button, self.replace_button, self.delete_button):
-            button.configure(state="normal" if item_id else "disabled")
+            button.configure(state="normal" if item_id else "disabled", cursor="hand2" if item_id else "arrow")
         self.photo = None
         self.preview.configure(image="", text="请选择签名查看图片" if self.items else "尚未导入签名")
         if item_id:
