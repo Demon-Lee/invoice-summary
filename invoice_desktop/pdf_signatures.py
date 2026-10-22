@@ -90,7 +90,7 @@ def _check_empty(page, box, sheet, label):
 
 
 def _find_labels(pdf, sheet, labels):
-    found = {}
+    candidates = {}
     for label in labels:
         # Whitespace within the label is allowed, but not a line break or a
         # larger word containing the label. Include either printed colon.
@@ -100,31 +100,54 @@ def _find_labels(pdf, sheet, labels):
         for index, page in enumerate(pdf.pages):
             for match in page.search(pattern, regex=True, return_chars=True, layout=False):
                 chars = [c for c in match["chars"] if str(c["text"]).strip()]
-                if not chars or any(not c.get("upright", False) for c in chars):
-                    _error(sheet, f"“{label}”的文字方向无法确认")
-                for char in chars:
-                    matrix = char.get("matrix", ())
-                    if (len(matrix) != 6 or matrix[0] <= 0 or matrix[3] <= 0
-                            or abs(matrix[1]) > 0.001 or abs(matrix[2]) > 0.001):
-                        _error(sheet, f"“{label}”的文字存在旋转或倾斜，无法可靠定位")
+                if not chars:
+                    continue
                 sizes = [_number(c.get("size"), sheet, "打印字号") for c in chars]
                 size = median(sizes)
-                if max(sizes) - min(sizes) > max(0.15, size * 0.05):
-                    _error(sheet, f"“{label}”使用混合打印字号，无法确定缩放")
                 box = (min(c["x0"] for c in chars), min(c["top"] for c in chars),
                        max(c["x1"] for c in chars), max(c["bottom"] for c in chars))
-                if box[3] - box[1] > size * 1.3:
-                    _error(sheet, f"“{label}”跨行，无法确定签字行")
-                matches.append({"page": index, "box": box, "size": size})
-        if len(matches) != 1:
-            _error(sheet, f"需要唯一的“{label}”标签，实际找到 {len(matches)} 处")
-        found[label] = matches[0]
-    anchors = list(found.values())
-    if len({a["page"] for a in anchors}) != 1:
-        _error(sheet, "签字标签与日期标签不在同一页")
-    centers = [(a["box"][1] + a["box"][3]) / 2 for a in anchors]
-    if max(centers) - min(centers) > max(1.0, min(a["size"] for a in anchors) * 0.3):
-        _error(sheet, "签字标签与日期标签不在同一打印行")
+                matches.append({"page": index, "box": box, "size": size, "chars": chars})
+        if not matches:
+            _error(sheet, f"未找到“{label}”标签")
+        candidates[label] = matches
+
+    # Footer instructions legitimately mention the signer names again. Select
+    # the complete role/role/date row, rather than requiring each word to occur
+    # only once in the document. Keep rejecting multiple complete rows.
+    first_label, second_label, date_label = labels
+    found = None
+    for date in candidates[date_label]:
+        for first in candidates[first_label]:
+            if first["page"] != date["page"] or first["box"][2] >= date["box"][0]:
+                continue
+            for second in candidates[second_label]:
+                if (second["page"] != date["page"] or first["box"][2] >= second["box"][0]
+                        or second["box"][2] >= date["box"][0]):
+                    continue
+                anchors = (first, second, date)
+                centers = [(a["box"][1] + a["box"][3]) / 2 for a in anchors]
+                if max(centers) - min(centers) > max(1.0, min(a["size"] for a in anchors) * 0.3):
+                    continue
+                if found is not None:
+                    _error(sheet, "存在多处完整签字行，无法确定签名位置")
+                found = dict(zip(labels, anchors))
+    if found is None:
+        _error(sheet, "未找到同页、同一行且顺序正确的签字与日期标签")
+
+    for label, anchor in found.items():
+        chars, size = anchor["chars"], anchor["size"]
+        if any(not c.get("upright", False) for c in chars):
+            _error(sheet, f"“{label}”的文字方向无法确认")
+        for char in chars:
+            matrix = char.get("matrix", ())
+            if (len(matrix) != 6 or matrix[0] <= 0 or matrix[3] <= 0
+                    or abs(matrix[1]) > 0.001 or abs(matrix[2]) > 0.001):
+                _error(sheet, f"“{label}”的文字存在旋转或倾斜，无法可靠定位")
+        sizes = [_number(c.get("size"), sheet, "打印字号") for c in chars]
+        if max(sizes) - min(sizes) > max(0.15, size * 0.05):
+            _error(sheet, f"“{label}”使用混合打印字号，无法确定缩放")
+        if anchor["box"][3] - anchor["box"][1] > size * 1.3:
+            _error(sheet, f"“{label}”跨行，无法确定签字行")
     return found
 
 
