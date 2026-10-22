@@ -13,6 +13,7 @@ ROLES = {
                "border": "#afbfda", "hover_border": "#7398d4", "ink": "#345e9b"},
 }
 LOCATION_ROLES = ("OpenInvoices", "OpenWorkbook", "OpenExport")
+ROLES["Signatures"] = dict(ROLES["Export"])
 for _role in LOCATION_ROLES:
     ROLES[_role] = {"fill": "#ffffff", "hover": "#eaf2ff", "pressed": "#dce8fa",
                     "border": "#a5b9d8", "hover_border": "#5787ce", "ink": "#24589d"}

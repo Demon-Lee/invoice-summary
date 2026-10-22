@@ -23,6 +23,8 @@ outputs = []
 binary_zip = release / f"发票汇总助手-{__version__}-Windows.zip"
 with zipfile.ZipFile(binary_zip, "w", compression=zipfile.ZIP_DEFLATED) as zipped:
     for file in sorted(distribution.rglob("*")):
+        if file.relative_to(distribution).parts[0].casefold() == "signatures":
+            continue
         if not file.is_file():
             continue
         if file.suffix.lower() in (".pdf", ".xlsx", ".xls") or "node_modules" in file.parts:
@@ -34,6 +36,8 @@ source_zip = release / f"发票汇总助手-{__version__}-源码.zip"
 with zipfile.ZipFile(source_zip, "w", compression=zipfile.ZIP_DEFLATED) as zipped:
     for name in tracked:
         if name:
+            if any(part.casefold() == "signatures" for part in Path(name).parts):
+                raise ValueError("Personal signatures cannot be included in source archives")
             zipped.write(root / name, Path("invoice-desktop") / name)
 outputs.append(source_zip)
 checksums = {file.name: hashlib.sha256(file.read_bytes()).hexdigest() for file in outputs}

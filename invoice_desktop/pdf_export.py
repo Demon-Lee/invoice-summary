@@ -13,6 +13,8 @@ from openpyxl.utils import get_column_letter
 from .controller import ExcelAdapter
 from .updates import sha256
 from .workbook import HEADERS, SIGNERS, text
+from .signatures import SLOTS
+from .pdf_signatures import add_signatures
 
 OUTPUTS = {"验收": "验收单.pdf", "领用": "领用单.pdf"}
 
@@ -40,7 +42,7 @@ def output_fingerprints(directory):
     return {name: _fingerprint(directory / name) for name in OUTPUTS.values()}
 
 
-def _sheet_plan(ws, filename):
+def _sheet_plan(ws, filename, with_signatures=False):
     # Sparse access avoids scanning the potentially huge style-only UsedRange.
     cells = {(c.row, c.column): c for c in ws._cells.values() if text(c.value)}
     rows = {}
@@ -76,17 +78,27 @@ def _sheet_plan(ws, filename):
         if (merge.min_row, merge.min_col) in cells:
             last_row = max(last_row, merge.max_row)
             last_col = max(last_col, merge.max_col)
-    return {"name": ws.title, "file_name": filename, "header_row": header,
+    plan = {"name": ws.title, "file_name": filename, "header_row": header,
             "print_area": f"A1:{get_column_letter(last_col)}{last_row}"}
+    if with_signatures:
+        row_height = ws.row_dimensions[footer + 1].height or ws.sheet_format.defaultRowHeight or 15.0
+        plan["signature_slots"] = []
+        for column, (key, sheet_name, label) in zip((1, 4), (slot for slot in SLOTS if slot[1] == ws.title)):
+            cell = ws.cell(footer + 1, column)
+            plan["signature_slots"].append({"key": key, "label": label, "row_height": float(row_height),
+                                            "font_size": float(cell.font.sz or 11),
+                                            "vertical_alignment": cell.alignment.vertical or "bottom"})
+        plan["signature_date_label"] = "验收日期" if ws.title == "验收" else "领用日期"
+    return plan
 
 
-def _print_plan(workbook):
+def _print_plan(workbook, with_signatures=False):
     wb = load_workbook(workbook, read_only=False, data_only=False, keep_links=False)
     try:
         missing = set(OUTPUTS) - set(wb.sheetnames)
         if missing:
             raise ValueError("工作簿缺少工作表：" + "、".join(sorted(missing)))
-        return {"sheets": [_sheet_plan(wb[name], filename) for name, filename in OUTPUTS.items()]}
+        return {"sheets": [_sheet_plan(wb[name], filename, with_signatures) for name, filename in OUTPUTS.items()]}
     finally:
         wb.close()
 
@@ -165,13 +177,15 @@ def _publish_pair(stage, directory, approved, installed):
         raise ValueError(f"发布未完成，已恢复原有 PDF（如有）：{exc}") from exc
 
 
-def export_workbook_pdfs(workbook, directory, approved, *, progress=None, excel=None, expected_workbook_sha256=None):
+def export_workbook_pdfs(workbook, directory, approved, *, progress=None, excel=None, expected_workbook_sha256=None,
+                         signatures=None):
     progress = progress or (lambda message: None)
     workbook, directory = Path(workbook).resolve(), Path(directory).resolve()
     result = {"status": "failed", "workbook": str(workbook), "output_dir": str(directory), "files": [], "cleanup": "完成"}
     scratch = stage = None
     installed = {}
     published = False
+    signing_report = None
     temp_parent = Path(tempfile.gettempdir()).resolve()
     try:
         if workbook.suffix.lower() != ".xlsx" or not workbook.is_file():
@@ -193,7 +207,7 @@ def export_workbook_pdfs(workbook, directory, approved, *, progress=None, excel=
             if expected_workbook_sha256 is not None:
                 raise ProcessedWorkbookChanged("工作簿在读取期间发生变化，请重新预览并执行处理后再导出")
             raise ValueError("工作簿在读取期间发生变化，请保存并关闭后重新导出")
-        plan = _print_plan(snapshot)
+        plan = _print_plan(snapshot, with_signatures=signatures is not None)
         directory.mkdir(parents=True, exist_ok=True)
         stage = Path(tempfile.mkdtemp(prefix=".invoice-pdf-stage-", dir=directory)).resolve()
         plan_file, report_file = scratch / "plan.json", scratch / "report.json"
@@ -203,11 +217,19 @@ def export_workbook_pdfs(workbook, directory, approved, *, progress=None, excel=
         report = json.loads(report_file.read_text(encoding="utf-8-sig"))
         if report.get("status") != "completed" or report.get("sheets") != plan["sheets"]:
             raise ValueError("Excel 导出结果不完整，未替换已有 PDF")
+        if signatures is not None:
+            progress("正在定位四处签字栏并添加已保存签名…")
+            _validate_pdfs(stage, plan)
+            signing_report = add_signatures(stage, plan, signatures)
         progress("正在检查两份 PDF 并保存到导出目录…")
         files = _validate_pdfs(stage, plan)
+        if sha256(workbook) != before:
+            raise ProcessedWorkbookChanged("工作簿在导出期间发生变化，请重新预览并执行处理后再导出")
         _publish_pair(stage, directory, approved, installed)
         published = True
         result.update(status="completed", files=[dict(item, path=str(directory / item["name"])) for item in files])
+        if signing_report is not None:
+            result["signatures"] = signing_report
     except Exception as exc:
         result["error"] = str(exc)
         missing_source = (expected_workbook_sha256 is not None and isinstance(exc, FileNotFoundError)

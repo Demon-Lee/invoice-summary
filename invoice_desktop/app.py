@@ -18,6 +18,8 @@ from .ui_actions import decorate_action_button
 from .pdf_export import export_workbook_pdfs, output_fingerprints
 from .pdf_export_ui import choose_export_directory
 from .window_icon import set_window_icon
+from .signatures import SignatureStore
+from .signature_ui import open_signature_manager
 
 EXECUTION_STEPS = (
     "1. 选择完整批次的 PDF 文件夹和目标 .xlsx 工作簿。",
@@ -37,6 +39,7 @@ class App:
     def __init__(self, root, state_dir=None, application_dir=None):
         self.root = root
         self.application_dir = Path(application_dir or application_root()).resolve()
+        self.signatures = SignatureStore(self.application_dir)
         identity = hashlib.sha256(str(self.application_dir).casefold().encode("utf-8")).hexdigest()[:16]
         self.state_dir = Path(state_dir or Path(os.environ.get("LOCALAPPDATA", str(Path.home()))) / "InvoiceSummary/instances" / identity)
         self.state_dir.mkdir(parents=True, exist_ok=True)
@@ -196,6 +199,7 @@ class App:
 
     def _update_action_styles(self):
         self._update_input_controls()
+        self.signature_button.configure(state="disabled" if self.busy or self._choosing_input else "normal")
         stage = self.operation_stage if self.busy else None
         preview = self.preview_result
         preview_label = "重新预览（清除校正）" if preview and preview.corrections and not preview.resume_pending else "只读预览"
@@ -219,7 +223,7 @@ class App:
             if str(widget.cget("state")) != state:
                 widget.configure(state=state)
         self._update_correction_hint()
-        for widget in (self.preview_button, self.execute, self.pdf_export_button,
+        for widget in (self.preview_button, self.execute, self.pdf_export_button, self.signature_button,
                        self.open_invoice_folder_button, self.open_workbook_button, self.open_pdf_folder_button):
             cursor = "arrow" if widget.instate(("disabled",)) else "hand2"
             if str(widget.cget("cursor")) != cursor:
@@ -750,8 +754,21 @@ class App:
             reason = result.get("error") or "请查看下方“检查、异常与实际结果”中的具体原因。"
             self._complete_stage("error", "执行处理未完成", "部分步骤可能已完成；解决原因后重新预览，可继续未完成的处理。", notify=True, reason="\n\n".join(filter(None, (reason, popup_notice))))
 
+    def _open_signatures(self):
+        if self.busy or self._choosing_input:
+            return
+        self._choosing_input = True
+        self._update_input_controls()
+        try:
+            open_signature_manager(self.root, self.signatures)
+        except (OSError, ValueError) as exc:
+            messagebox.showwarning("签名管理未能打开", str(exc), parent=self.root)
+        finally:
+            self._choosing_input = False
+            self._update_input_controls()
+
     def _export_pdf(self):
-        if self.busy:
+        if self.busy or self._choosing_input:
             return
         export_issue = self._refresh_pdf_export_receipt()
         if not self._can_export_pdf():
@@ -763,9 +780,16 @@ class App:
             if workbook.suffix.lower() != ".xlsx" or not workbook.is_file():
                 self._pdf_export_receipt = None
                 raise ValueError("本次处理完成的工作簿已不可用，请重新预览并执行处理")
-            directory = choose_export_directory(self.root, workbook)
-            if not directory:
+            self._choosing_input = True
+            self._update_input_controls()
+            try:
+                options = choose_export_directory(self.root, workbook, self.signatures)
+            finally:
+                self._choosing_input = False
+                self._update_input_controls()
+            if not options:
                 return
+            directory = options["directory"]
             approved = output_fingerprints(directory)
         except (OSError, ValueError) as exc:
             messagebox.showwarning("暂不能导出 PDF", str(exc), parent=self.root)
@@ -783,6 +807,7 @@ class App:
         self._execute_before_export = str(self.execute.cget("state"))
         self._correction_hint_before_export = self._correction_hint_enabled
         self._run(lambda: export_workbook_pdfs(workbook, directory, approved, expected_workbook_sha256=receipt["sha256"],
+                                              signatures=options["signatures"],
                                               progress=lambda msg: self.events.put(("progress", msg))),
                   self._render_pdf_result, stage="export")
 
@@ -798,6 +823,12 @@ class App:
             parts.append("工作簿：" + result["workbook"])
         for item in result.get("files", []):
             parts.append(f"{item['sheet']}：{item['path']}（{item['pages']} 页）")
+        signing = result.get("signatures")
+        if signing:
+            parts.append("已添加签名：\n" + "\n".join(
+                f"{item['sheet']} · {item['role']}：{item['label']}（第 {item['page']} 页）"
+                for item in signing["applied"]))
+            parts.append(f"统一签名框：{signing['box_width']:.1f} × {signing['box_height']:.1f} PDF 点；保持笔迹比例。")
         if result.get("error"):
             parts.append("原因：" + result["error"])
         if export_issue:
@@ -813,6 +844,8 @@ class App:
             detail = "两份 PDF 已保存；A4 横向、所有列一页宽，明细向下自动分页。可点击“打开导出目录”查看。"
             tone = "success" if result["cleanup"] == "完成" and not export_issue else "warning"
             reason = "\n".join(f"{item['path']}（{item['pages']} 页）" for item in result["files"])
+            if signing:
+                reason += f"\n\n已添加 {len(signing['applied'])} 处签名；原 Excel 未添加签名。"
             if tone == "warning":
                 if result["cleanup"] != "完成":
                     reason += "\n\n临时文件清理：" + result["cleanup"]

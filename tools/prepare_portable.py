@@ -11,6 +11,7 @@ project = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(project))
 from invoice_desktop.updates import EngineStore, read_manifest, check_application_contract
 from invoice_desktop.policy import snapshot_files
+from invoice_desktop.signatures import SignatureStore
 
 
 def prepare(directory, preserve):
@@ -62,6 +63,8 @@ def prepare(directory, preserve):
     old = versions[1] if len(versions) > 1 and versions[1] != versions[0] else None
     store = EngineStore(target, bundled)
     store._activate({"active": versions[0], "previous": old})
+    if (preserve / "signatures" / "config.json").is_file():
+        SignatureStore(preserve).copy_to(directory)
     return {"version": versions[0], "origin": origin, "directory": str(target), "previous": old}
 
 

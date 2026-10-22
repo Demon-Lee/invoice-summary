@@ -5,6 +5,7 @@ build/
 dist/
 release/
 recognition/
+signatures/
 .pytest_cache/
 *.spec
 .superpowers/

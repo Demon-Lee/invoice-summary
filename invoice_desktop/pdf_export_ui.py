@@ -1,10 +1,13 @@
 """Native output-directory chooser; no files are created by this dialog."""
 import tkinter as tk
 from pathlib import Path
-from tkinter import filedialog, ttk
+from tkinter import filedialog, messagebox, ttk
+
+from .signature_ui import open_signature_manager
+from .signatures import SLOTS
 
 
-def choose_export_directory(root, workbook):
+def choose_export_directory(root, workbook, signature_store):
     dialog = tk.Toplevel(root)
     dialog.title("导出验收单与领用单")
     dialog.resizable(True, False)
@@ -13,6 +16,7 @@ def choose_export_directory(root, workbook):
     dialog.columnconfigure(0, weight=1)
     directory = tk.StringVar(value=str(Path(workbook).parent / "导出PDF"))
     selected = []
+    displayed_revision = None
     ttk.Label(dialog, text="分别生成两份 PDF", font=("Microsoft YaHei UI", 12, "bold")).grid(row=0, column=0, sticky="w")
     ttk.Label(dialog, text="验收单.pdf  ·  领用单.pdf\nA4 横向，所有列在一页宽；明细较多时向下自动分页。",
               justify="left").grid(row=1, column=0, sticky="w", pady=(8, 12))
@@ -32,10 +36,51 @@ def choose_export_directory(root, workbook):
         if value:
             directory.set(value)
     ttk.Button(row, text="选择位置…", command=pick).grid(row=0, column=1, padx=(8, 0))
+    signing = ttk.LabelFrame(dialog, text="签名", padding=10)
+    signing.grid(row=5, column=0, sticky="ew", pady=(0, 14))
+    signing.columnconfigure(0, weight=1)
+    include = tk.BooleanVar(value=False)
+    checkbox = ttk.Checkbutton(signing, text="添加已保存签名", variable=include)
+    checkbox.grid(row=0, column=0, sticky="w")
+    signature_summary = ttk.Label(signing, justify="left", wraplength=490)
+    signature_summary.grid(row=1, column=0, columnspan=2, sticky="ew", pady=(7, 0))
+    def refresh_signatures(initial=False):
+        nonlocal displayed_revision
+        try:
+            state = signature_store.read()
+            displayed_revision = signature_store.revision(state)
+            labels = {item["id"]: item["label"] for item in state["items"]}
+            assigned = [(sheet, label, labels[state["bindings"][key]]) for key, sheet, label in SLOTS
+                        if state["bindings"].get(key)]
+            available = bool(assigned)
+            was_disabled = checkbox.instate(("disabled",))
+            checkbox.configure(state="normal" if available else "disabled")
+            if initial or not available or was_disabled:
+                include.set(available)
+            signature_summary.configure(text="\n".join(f"{sheet} · {role}：{label}" for sheet, role, label in assigned)
+                                        if available else "请在签名管理中导入图片，并为签字位置选择标签。")
+        except (OSError, ValueError) as exc:
+            displayed_revision = None
+            include.set(False)
+            checkbox.configure(state="disabled")
+            signature_summary.configure(text="签名设置不可用：" + str(exc))
+    def manage():
+        open_signature_manager(dialog, signature_store)
+        refresh_signatures()
+    ttk.Button(signing, text="签名管理…", command=manage).grid(row=0, column=1, sticky="e", padx=(10, 0))
+    refresh_signatures(initial=True)
     buttons = ttk.Frame(dialog)
-    buttons.grid(row=5, column=0, sticky="e")
+    buttons.grid(row=6, column=0, sticky="e")
     def accept():
-        selected.append(directory.get())
+        try:
+            snapshot = signature_store.snapshot(expected_revision=displayed_revision) if include.get() else None
+            if snapshot is not None and not any(snapshot["bindings"].values()):
+                raise ValueError("签字位置已变化，请在签名管理中重新选择标签。")
+        except (OSError, ValueError) as exc:
+            messagebox.showwarning("签名暂不可用", str(exc), parent=dialog)
+            refresh_signatures()
+            return
+        selected.append({"directory": directory.get(), "signatures": snapshot})
         dialog.destroy()
     ttk.Button(buttons, text="取消", command=dialog.destroy).pack(side="right", padx=(8, 0))
     start = ttk.Button(buttons, text="开始导出", command=accept, style="Primary.TButton")
