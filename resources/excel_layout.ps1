@@ -1,4 +1,4 @@
-﻿# Native content fitting library. Dot-sourcing this file only defines functions.
+# Native content fitting library. Dot-sourcing this file only defines functions.
 function Release-InvoiceLayoutCom($value) {
     if ($null -ne $value -and [Runtime.InteropServices.Marshal]::IsComObject($value)) {
         # A disconnected server must not replace the primary operation error.
@@ -83,70 +83,11 @@ function Assert-InvoiceFormulaSnapshot($book, $snapshots, [string]$phase) {
     }
 }
 
-function Fit-InvoiceCaptionWidths($sheet, $columns, $item) {
-    foreach ($address in @($item.content_cells)) {
-        $cell = $span = $column = $measureColumns = $spanColumns = $lastColumn = $font = $null
-        try {
-            $cell = $sheet.Range([string]$address)
-            $row = [int]$cell.Row
-            if ($row -ge [int]$item.header_row -and $row -le [int]$item.footer_row) { continue }
-            if ([bool]$cell.MergeCells -or [bool]$cell.HasFormula -or $null -eq $cell.Value2) { continue }
-            $spanAddress = [string]$address
-            if ($null -ne $item.caption_spans) {
-                $property = $item.caption_spans.PSObject.Properties[[string]$address]
-                if ($null -ne $property) { $spanAddress = [string]$property.Value }
-            }
-            $span = $sheet.Range($spanAddress)
-            $column = $columns.Item([int]$cell.Column)
-            $detailWidth = [double]$column.ColumnWidth
-            try {
-                # Native AutoFit measures the cell's actual font/number format.
-                # Restore the detail width before checking the full text span.
-                $measureColumns = $cell.Columns
-                [void]$measureColumns.AutoFit()
-                $required = [double]$column.Width + 2.0
-            } finally {
-                $column.ColumnWidth = $detailWidth
-                Release-InvoiceLayoutCom $measureColumns
-                $measureColumns = $null
-            }
-            $label = ([string]$cell.Value2).Trim()
-            if ($row -eq [int]$item.footer_row + 1 -and [int]$cell.Column -in @(1, 4) -and
-                $label -match '^(经办人|验收人|保管人|领用人)[:：]?$') {
-                $font = $cell.Font
-                $required += 3.0 * [double]$font.Size + 4.0
-            }
-            $spanColumns = $span.Columns
-            $lastColumn = $columns.Item([int]$span.Column + [int]$spanColumns.Count - 1)
-            for ($attempt = 0; $attempt -lt 3; $attempt++) {
-                $deficit = $required - [double]$span.Width
-                if ($deficit -le 0.1) { break }
-                $units = [double]$lastColumn.ColumnWidth
-                $points = [double]$lastColumn.Width
-                if ($points -le 0 -or $units -le 0) { throw ('Invalid caption width: ' + $address) }
-                $nextWidth = [Math]::Min(255.0, $units + $deficit * $units / $points + 0.25)
-                if ($nextWidth -le $units) { break }
-                $lastColumn.ColumnWidth = $nextWidth
-            }
-            if ([double]$span.Width + 0.1 -lt $required) {
-                throw ('Caption cannot fit within the native column-width limit: ' + $address)
-            }
-        } finally {
-            Release-InvoiceLayoutCom $font
-            Release-InvoiceLayoutCom $lastColumn
-            Release-InvoiceLayoutCom $spanColumns
-            Release-InvoiceLayoutCom $measureColumns
-            Release-InvoiceLayoutCom $column
-            Release-InvoiceLayoutCom $span
-            Release-InvoiceLayoutCom $cell
-        }
-    }
-}
-
 function Fit-InvoiceContent($book, $item, $formulaSnapshot = $null) {
     $sheets = $sheet = $rows = $columns = $band = $bandRows = $bandColumns = $null
     $widthBand = $null
     $application = $functions = $null
+    $columnMinima = @{}
     $rowMinima = @{}
     $name = [string]$item.name
     try {
@@ -160,7 +101,15 @@ function Fit-InvoiceContent($book, $item, $formulaSnapshot = $null) {
         $functions = $application.WorksheetFunction
         $rows = $sheet.Rows
         $columns = $sheet.Columns
-        # Column widths follow current contents; row heights keep their floor.
+        # Include column headings, not the merged title or the three footer
+        # rows. Keep existing minimum widths so fixed footer labels still fit.
+        for ($index = 1; $index -le $lastColumn; $index++) {
+            $column = $null
+            try {
+                $column = $columns.Item($index)
+                $columnMinima[$index] = [double]$column.ColumnWidth
+            } finally { Release-InvoiceLayoutCom $column }
+        }
         for ($index = $first; $index -le $last; $index++) {
             $row = $null
             try {
@@ -184,11 +133,13 @@ function Fit-InvoiceContent($book, $item, $formulaSnapshot = $null) {
         $widthBand = $sheet.Range('A' + $first + ':' + $letter + [int]$item.footer_row)
         $bandColumns = $widthBand.Columns
         [void]$bandColumns.AutoFit()
-        Fit-InvoiceCaptionWidths $sheet $columns $item
         for ($index = 1; $index -le $lastColumn; $index++) {
             $column = $null
             try {
                 $column = $columns.Item($index)
+                if ([double]$column.ColumnWidth -lt [double]$columnMinima[$index]) {
+                    $column.ColumnWidth = [double]$columnMinima[$index]
+                }
                 # Excel's hard column limit: use native wrapping only for a
                 # column that cannot grow further. Ordinary details stay flat.
                 if ([double]$column.ColumnWidth -ge 254.9) {

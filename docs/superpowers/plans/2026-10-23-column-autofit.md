@@ -1,5 +1,7 @@
 # Native Column AutoFit Implementation Plan
 
+Status: Reverted at the user's request. Current application restores grow-only column widths; completed steps below describe historical delivery.
+
 **Goal:** Let native column fitting grow or shrink with current contents while keeping captions/signing space readable.
 
 **Architecture:** Update the existing application-owned excel_layout.ps1 helper shared by formatting and export. Remove old template column minima, retain native header/detail/total AutoFit and row minima, then fit nonmerged captions using their existing validated spans and native single-cell width measurement. No engine or workbook-data changes.
