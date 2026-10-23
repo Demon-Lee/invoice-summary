@@ -311,12 +311,16 @@ class _SignatureManager:
         for sequence in wheel_events:
             dialog.bind(sequence, self._scroll_body, add="+")
             self.listbox.bind(sequence, self._scroll_library)
+        role_actions = ttk.Frame(roles_body)
+        role_actions.grid(row=len(role_cards) + 1, column=0, sticky="ew", pady=(4, 2))
+        self.role_status = ttk.Label(role_actions, text="正在读取签名库…", foreground=PALETTE["muted"])
+        self.role_status.pack(side="left")
+        self.save_button = ttk.Button(role_actions, text="保存", command=self.save_bindings, style="ExecuteAction.TButton", cursor="hand2")
+        self.save_button.pack(side="right")
         footer = self.footer = ttk.Frame(frame)
         footer.grid(row=2, column=0, sticky="ew", pady=(10, 0))
         self.status = ttk.Label(footer, text="正在读取签名库…", foreground=PALETTE["muted"])
         self.status.pack(side="left")
-        self.save_button = ttk.Button(footer, text="保存", command=self.save_bindings, style="ExecuteAction.TButton", cursor="hand2")
-        self.save_button.pack(side="right")
         dialog.bind("<Destroy>", self._on_destroy, add="+")
         self._select_tab("roles")
         self.load()
@@ -343,17 +347,13 @@ class _SignatureManager:
         return self._select_tab(keys[(keys.index(self.active_tab) + direction) % len(keys)], focus=True)
 
     def _update_footer(self):
-        if self.active_tab == "roles":
-            self.save_button.pack(side="right")
+        if self.active_tab == "library" and self.status.cget("text"):
             self.footer.grid()
         else:
-            self.save_button.pack_forget()
-            if self.status.cget("text"):
-                self.footer.grid()
-            else:
-                self.footer.grid_remove()
+            self.footer.grid_remove()
 
     def _set_status(self, text):
+        self.role_status.configure(text=text)
         self.status.configure(text=text)
         self._update_footer()
 
