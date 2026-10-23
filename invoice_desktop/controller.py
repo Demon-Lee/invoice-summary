@@ -13,7 +13,7 @@ import subprocess
 import sys
 import tempfile
 from dataclasses import dataclass, field
-from decimal import Decimal
+from decimal import Context, Decimal
 from pathlib import Path
 
 from .updates import read_manifest, sha256
@@ -107,20 +107,35 @@ class ExcelAdapter:
         from .layout import layout_plan
         from openpyxl import load_workbook
 
+        workbook = Path(workbook).resolve()
+        before_hash = sha256(workbook)
+        plan = layout_plan(workbook)
+        price_areas = {item['name']: (item['columns']['单价'], item['header_row'], item['footer_row'])
+                       for item in plan['sheets']}
+
         def contents(path):
+            price_precision = Context(prec=15)
+
+            def value(sheet, cell):
+                area = price_areas.get(sheet.title)
+                if (area and cell.column == area[0] and area[1] < cell.row < area[2]
+                        and cell.data_type == 'n' and type(cell.value) in (int, float)):
+                    # Native spreadsheet saves can round calculated unit prices
+                    # to 15 significant digits. Other values/types stay exact.
+                    return price_precision.create_decimal(str(cell.value))
+                return cell.value
+
             book = load_workbook(path, data_only=False)
             try:
                 return [(sheet.title,
-                         tuple((cell.coordinate, cell.data_type, cell.value)
+                         tuple((cell.coordinate, cell.data_type, value(sheet, cell))
                                for cell in sorted(sheet._cells.values(), key=lambda cell: (cell.row, cell.column))
-                               if cell.value is not None),
+                               if cell.value is not None and cell.value != ''),
                          tuple(sorted(str(area) for area in sheet.merged_cells.ranges)))
                         for sheet in book.worksheets]
             finally:
                 book.close()
 
-        workbook = Path(workbook).resolve()
-        before_hash = sha256(workbook)
         before_contents = contents(workbook)
         staged = None
         try:
@@ -132,7 +147,7 @@ class ExcelAdapter:
                 raise ValueError("工作簿在准备排版时发生变化，请重新预览")
             with tempfile.TemporaryDirectory(prefix="invoice-layout-") as temporary:
                 plan_file = Path(temporary) / "plan.json"
-                plan_file.write_text(json.dumps(layout_plan(staged), ensure_ascii=False), encoding="utf-8")
+                plan_file.write_text(json.dumps(plan, ensure_ascii=False), encoding="utf-8")
                 self._run(resource_root() / "resources/run_excel.ps1", [
                     "-EngineScript", str(script), "-WorkbookInput", str(staged),
                     "-LayoutPlanFile", str(plan_file),
