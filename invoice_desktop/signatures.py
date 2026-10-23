@@ -614,6 +614,22 @@ class SignatureStore:
         config["attention"].pop(slot_key, None)
         self._save(config)
 
+    @_serialized
+    def assign_many(self, bindings, expected_revision=None):
+        """Commit explicitly chosen positions together after validating all of them."""
+        if (not isinstance(bindings, dict) or not bindings
+                or any(key not in _KEYS for key in bindings)):
+            raise ValueError("签名位置无效")
+        config = self._read()
+        self._expected(config, expected_revision)
+        for item_id in bindings.values():
+            if item_id is not None:
+                self._item(config, item_id)
+        for key, item_id in bindings.items():
+            config["bindings"][key] = item_id
+            config["attention"].pop(key, None)
+        self._save(config)
+
     def _original_bytes(self, item):
         try:
             data = self._raw_file(self._image_path(item["file"]))

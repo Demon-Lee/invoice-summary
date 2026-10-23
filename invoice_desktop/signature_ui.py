@@ -14,7 +14,7 @@ from .ui_widgets import AutoHideScrollbar
 
 
 def open_signature_manager(parent, store):
-    """Open a blocking manager; all successful changes are saved immediately."""
+    """Open a blocking manager; position edits commit only through Save."""
     previous_grab = parent.grab_current()
     previous_status = previous_grab.grab_status() if previous_grab else None
     dialog = tk.Toplevel(parent)
@@ -70,6 +70,10 @@ class _SignatureManager:
         self.selectors = {}
         self.role_labels = {}
         self.selector_ids = [None]
+        self.pending_bindings = {}
+        self.pending_fingerprints = {}
+        self.pending_attention = set()
+        self.saved_awaiting_refresh = False
         self.refreshing = False
         self.busy = False
         self.needs_refresh = False
@@ -86,9 +90,6 @@ class _SignatureManager:
         header = surface(frame, padding=12)
         header.grid(row=0, column=0, sticky="ew", pady=(0, 10))
         ttk.Label(header, text="签名管理", style="Section.TLabel", font=(FONT, 13, "bold")).pack(anchor="w")
-        subtitle = ttk.Label(header, text="文件名即标签，也可直接把图片放入签名图片文件夹。", style="Muted.TLabel", wraplength=500)
-        subtitle.pack(anchor="w", fill="x", pady=(4, 0))
-        header.bind("<Configure>", lambda event: subtitle.configure(wraplength=max(160, event.width - 28)))
         scroll_host = tk.Frame(frame, bg=PALETTE["background"])
         scroll_host.grid(row=1, column=0, sticky="nsew")
         scroll_host.rowconfigure(0, weight=1)
@@ -109,7 +110,10 @@ class _SignatureManager:
         library = surface(body, padding=12)
         library.columnconfigure(0, weight=1)
         library.grid(row=0, column=0, sticky="ew")
-        ttk.Label(library, text="签名库", style="Section.TLabel").grid(row=0, column=0, sticky="w", pady=(0, 8))
+        library_heading = ttk.Frame(library, style="Surface.TFrame")
+        library_heading.grid(row=0, column=0, sticky="ew", pady=(0, 8))
+        ttk.Label(library_heading, text="签名库", style="Section.TLabel").pack(side="left")
+        ttk.Label(library_heading, text="签名格式仅限PNG/JPG/JPEG", style="Muted.TLabel").pack(side="left", padx=(12, 0))
         toolbar = ttk.Frame(library, style="Surface.TFrame")
         toolbar.grid(row=1, column=0, sticky="ew", pady=(0, 4))
         # Use the root's existing rounded surfaces; do not rebuild shared theme images.
@@ -172,11 +176,8 @@ class _SignatureManager:
                 combo.bind(sequence, self._scroll_body)
             self.selectors[key] = combo
         roles.columnconfigure(0, weight=1)
-        note = ttk.Label(body, text="放入 PNG/JPG/JPEG 后点击刷新列表。同一签名可用于多个位置。",
-                         wraplength=550)
-        note.grid(row=2, column=0, sticky="ew", pady=(10, 4))
         def wrap_text(event):
-            for label in (note, self.preview, self.notice):
+            for label in (self.preview, self.notice):
                 label.configure(wraplength=max(100, event.width - 40))
         body.bind("<Configure>", wrap_text, add="+")
         for sequence in wheel_events:
@@ -186,8 +187,8 @@ class _SignatureManager:
         footer.grid(row=2, column=0, sticky="ew", pady=(10, 0))
         self.status = ttk.Label(footer, text="正在读取签名库…", foreground=PALETTE["muted"])
         self.status.pack(side="left")
-        self.close_button = ttk.Button(footer, text="关闭", command=self.close, style="ExportAction.TButton", cursor="hand2")
-        self.close_button.pack(side="right")
+        self.save_button = ttk.Button(footer, text="保存", command=self.save_bindings, style="ExecuteAction.TButton", cursor="hand2")
+        self.save_button.pack(side="right")
         dialog.bind("<Destroy>", self._on_destroy, add="+")
         self.load()
         self.poll_id = dialog.after(40, self._poll)
@@ -247,23 +248,14 @@ class _SignatureManager:
                 if selected == previous_selection:
                     self.listbox.yview_moveto(list_position)
             labels = [item["label"] for item in self.items]
-            attention = data.get("attention", {})
-            warnings = list(data.get("issues", []))
-            affected = [f"{sheet} · {role}" for key, sheet, role in SLOTS if key in attention]
-            if affected:
-                warnings.insert(0, "以下位置需要重新确认：" + "、".join(affected) + "。请选择标签，或明确选择不使用签名。")
-            shown = warnings[:5]
-            if len(warnings) > len(shown):
-                shown.append(f"另有 {len(warnings) - len(shown)} 项，请处理后刷新列表。")
-            self.notice.configure(text="\n".join(shown))
-            if warnings:
-                self.notice.grid()
-            else:
-                self.notice.grid_remove()
-            for key, sheet, role in SLOTS:
-                pending = key in attention
-                self.role_labels[key].configure(text=f"{sheet} · {role}" + ("  ·  需确认" if pending else ""),
-                                                foreground="#946522" if pending else PALETTE["text"])
+            fingerprints = {item["id"]: item["sha256"] for item in items}
+            for key, item_id in list(self.pending_bindings.items()):
+                if item_id is not None and (item_id not in fingerprints
+                        or fingerprints[item_id] != self.pending_fingerprints.get(key)):
+                    del self.pending_bindings[key]
+                    self.pending_fingerprints.pop(key, None)
+                    self.pending_attention.add(key)
+            self._show_warnings()
             empty = "（不使用签名）"
             while empty in labels:
                 empty += " "
@@ -271,12 +263,33 @@ class _SignatureManager:
             for key, combo in self.selectors.items():
                 if changed or not combo.cget("values"):
                     combo.configure(values=[empty] + labels)
-                bound = data["bindings"].get(key)
+                bound = (None if key in self.pending_attention else
+                         self.pending_bindings.get(key, data["bindings"].get(key)))
                 combo.current(self.selector_ids.index(bound) if bound in self.selector_ids else 0)
             self.show_selected()
         finally:
             self.refreshing = False
             self.canvas.yview_moveto(body_position)
+
+    def _show_warnings(self):
+        attention = ((set(self.data.get("attention", {})) | self.pending_attention)
+                     - self.pending_bindings.keys())
+        warnings = list(self.data.get("issues", []))
+        affected = [f"{sheet} · {role}" for key, sheet, role in SLOTS if key in attention]
+        if affected:
+            warnings.insert(0, "以下位置需要重新确认：" + "、".join(affected) + "。请选择标签，或明确选择不使用签名。")
+        shown = warnings[:5]
+        if len(warnings) > len(shown):
+            shown.append(f"另有 {len(warnings) - len(shown)} 项，请处理后刷新列表。")
+        self.notice.configure(text="\n".join(shown))
+        if warnings:
+            self.notice.grid()
+        else:
+            self.notice.grid_remove()
+        for key, sheet, role in SLOTS:
+            pending = key in attention
+            self.role_labels[key].configure(text=f"{sheet} · {role}" + ("  ·  需确认" if pending else ""),
+                                            foreground="#946522" if pending else PALETTE["text"])
 
     def show_selected(self, event=None):
         if self.busy or self.closed:
@@ -306,7 +319,8 @@ class _SignatureManager:
         enabled = bool(self.selected_id()) and not self.busy and not self.needs_refresh
         for button in (self.rename_button, self.replace_button, self.delete_button):
             button.configure(state="normal" if enabled else "disabled", cursor="hand2" if enabled else "arrow")
-        self.close_button.configure(state="disabled" if self.control_kind == "mutate" else "normal")
+        can_save = bool(self.pending_bindings) and not self.busy and not self.needs_refresh and not self.pending_attention
+        self.save_button.configure(state="normal" if can_save else "disabled", cursor="hand2" if can_save else "arrow")
 
     def _begin(self, kind, *args, selected=None, action=None, path=None, **kwargs):
         if self.busy or self.closed:
@@ -362,18 +376,29 @@ class _SignatureManager:
             self._update_controls()
             if error:
                 self.refresh(self.data, selected=selected)
-                self.status.configure(text="签名已保存，请刷新列表核对。" if isinstance(error, SignatureRefreshError)
-                                      else "操作未完成，请刷新列表核对。")
+                if isinstance(error, SignatureRefreshError):
+                    if action == "save_bindings":
+                        self.saved_awaiting_refresh = True
+                    status = "签字位置已保存，请刷新列表核对。" if action == "save_bindings" else "签名已保存，请刷新列表核对。"
+                else:
+                    status = "操作未完成，请刷新列表核对。"
+                self.status.configure(text=status)
                 messagebox.showerror("签名库", _error_text(error), parent=self.dialog)
                 continue
-            self.status.configure(text="修改后自动保存")
             if kind == "mutate":
                 data, result = value
                 selected = result if isinstance(result, str) else selected
             else:
                 data = value
+            saved_positions = action == "save_bindings" or self.saved_awaiting_refresh
+            if saved_positions:
+                self.pending_bindings.clear()
+                self.pending_fingerprints.clear()
+                self.saved_awaiting_refresh = False
             self.refresh(data, selected=selected)
-            if action:
+            self.status.configure(text="签字位置已保存" if saved_positions else
+                                  "签字位置尚未保存" if self.pending_bindings else "")
+            if action and action != "save_bindings":
                 self._confirm_change(action, selected, path)
         if not self.closed:
             self.poll_id = self.dialog.after(40, self._poll)
@@ -439,7 +464,7 @@ class _SignatureManager:
 
     def affected_roles(self, item_id):
         return [f"{sheet} · {label}" for key, sheet, label in SLOTS
-                if self.data["bindings"].get(key) == item_id]
+                if self.data["bindings"].get(key) == item_id or self.pending_bindings.get(key) == item_id]
 
     def replace(self):
         item_id = self.selected_id()
@@ -481,5 +506,16 @@ class _SignatureManager:
             return
         index = self.selectors[key].current()
         if 0 <= index < len(self.selector_ids):
-            self.run("assign", key, self.selector_ids[index],
-                     expected_revision=self.store.revision(self.data), selected=self.selected_id())
+            item_id = self.selector_ids[index]
+            self.pending_bindings[key] = item_id
+            self.pending_fingerprints[key] = next((item["sha256"] for item in self.items if item["id"] == item_id), None)
+            self.pending_attention.discard(key)
+            self._show_warnings()
+            self._update_controls()
+            self.status.configure(text="签字位置尚未保存")
+
+    def save_bindings(self):
+        if self.busy or self.closed or self.needs_refresh or self.pending_attention or not self.pending_bindings:
+            return
+        self._begin("mutate", "assign_many", dict(self.pending_bindings), action="save_bindings",
+                    expected_revision=self.store.revision(self.data), selected=self.selected_id())

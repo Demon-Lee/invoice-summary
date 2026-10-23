@@ -129,7 +129,6 @@ def build_interface(app, *, execution_steps, necessary_conditions):
     brand.pack(side="left")
     ttk.Label(brand, text="发票汇总助手", style="Title.TLabel").pack(anchor="w")
     ttk.Label(header, text=f"V{__version__}", style="Version.TLabel").pack(side="right")
-    ttk.Label(header, text="离线处理", style="Subtitle.TLabel").pack(side="right", padx=(0, 16))
     process = ttk.Frame(outer, padding=(12, 10))
     process.pack(fill="both", expand=True)
     process.columnconfigure(0, weight=1)
@@ -173,7 +172,6 @@ def build_interface(app, *, execution_steps, necessary_conditions):
     app.signature_button.pack(side="left", padx=(14, 0))
     locations = surface(actions, padding=5)
     locations.pack(fill="x", pady=(6, 0))
-    location_caption = ttk.Label(locations, text="打开位置", style="Surface.TLabel", font=(FONT, 9, "bold"))
     location_buttons = []
     for attribute, label, action, role in (
         ("open_invoice_folder_button", "打开发票目录", lambda: app._open(app.pdf.get()), "OpenInvoices"),
@@ -190,19 +188,17 @@ def build_interface(app, *, execution_steps, necessary_conditions):
         nonlocal location_layout
         available = max(1, locations.winfo_width() - 12)
         widths = tuple(button.winfo_reqwidth() for button in location_buttons)
-        single_row = location_caption.winfo_reqwidth() + 18 + sum(width + 8 for width in widths) <= available
+        single_row = sum(width + 8 for width in widths) <= available
         columns = 3 if single_row else max(1, min(3, (available + 8) // (max(widths) + 8)))
         layout = (single_row, columns, widths)
         if layout == location_layout:
             return
         location_layout = layout
-        for column in range(4):
+        for column in range(3):
             locations.columnconfigure(column, uniform="location-buttons" if not single_row and column < columns else "", weight=0)
-        location_caption.grid(row=0, column=0, columnspan=1 if single_row else columns,
-                              sticky="w", padx=(6, 12), pady=(0, 0 if single_row else 4))
         for index, button in enumerate(location_buttons):
-            button.grid(row=0 if single_row else 1 + index // columns,
-                        column=index + 1 if single_row else index % columns,
+            button.grid(row=index // columns,
+                        column=index % columns,
                         sticky="ew", padx=(0, 8), pady=(0, 0 if single_row else 4))
     locations.bind("<Configure>", layout_locations)
     layout_locations()
