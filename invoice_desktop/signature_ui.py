@@ -3,7 +3,7 @@
 from pathlib import Path
 from queue import Empty
 import tkinter as tk
-from tkinter import filedialog, messagebox, simpledialog, ttk
+from tkinter import ttk
 
 from PIL import ImageTk
 
@@ -11,6 +11,7 @@ from .signatures import SLOTS
 from .signature_tasks import SignatureRefreshError, SignatureTasks
 from .ui import FONT, PALETTE, surface
 from .ui_widgets import AutoHideScrollbar
+from .dialogs import center_dialog, filedialog, messagebox, simpledialog
 
 
 def open_signature_manager(parent, store):
@@ -30,6 +31,7 @@ def open_signature_manager(parent, store):
     dialog.protocol("WM_DELETE_WINDOW", manager.close)
     dialog.bind("<Escape>", lambda event: manager.close())
     try:
+        center_dialog(dialog, parent)
         dialog.deiconify()
         dialog.wait_visibility()
         dialog.grab_set()

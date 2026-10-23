@@ -5,6 +5,7 @@ import tkinter as tk
 from tkinter import font as tkfont, ttk
 
 from .ui import FONT, PALETTE, STAGES, surface, text_widget
+from .dialogs import center_dialog
 
 
 def show_result_dialog(parent, title, message, *, diagnostics=None, tone="error"):
@@ -65,6 +66,7 @@ def show_result_dialog(parent, title, message, *, diagnostics=None, tone="error"
                              style="ExecuteAction.TButton", cursor="hand2")
         confirm.grid(row=0, column=1, sticky="e")
         confirm.bind("<Return>", close)
+        center_dialog(dialog, parent)
         dialog.deiconify()
         dialog.wait_visibility()
         dialog.grab_set()

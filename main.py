@@ -71,10 +71,10 @@ if __name__ == "__main__":
             raise SystemExit(1)
         try:
             import tkinter as tk
-            from tkinter import messagebox
+            from invoice_desktop.dialogs import messagebox
             root = tk.Tk()
             root.withdraw()
-            messagebox.showerror("发票汇总助手未能启动", str(exc))
+            messagebox.showerror("发票汇总助手未能启动", str(exc), parent=root)
             root.destroy()
         finally:
             if sys.stderr:

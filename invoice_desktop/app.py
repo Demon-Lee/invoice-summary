@@ -7,7 +7,7 @@ import threading
 import tkinter as tk
 from pathlib import Path
 from decimal import Decimal, InvalidOperation
-from tkinter import filedialog, messagebox, ttk
+from tkinter import ttk
 
 from . import __version__
 from .controller import Controller, resource_root, application_root
@@ -22,6 +22,7 @@ from .signatures import SignatureStore
 from .signature_ui import open_signature_manager
 from .error_messages import error_summary
 from .result_dialog import show_result_dialog
+from .dialogs import center_dialog, filedialog, messagebox
 
 EXECUTION_STEPS = (
     "1. 选择完整批次的 PDF 文件夹和目标 .xlsx 工作簿。",
@@ -595,32 +596,32 @@ class App:
             return
         preview = self.preview_result
         if preview is None:
-            messagebox.showinfo("先进行预览", "请先进行只读预览，再选择一条明细进行人工校正。")
+            messagebox.showinfo("先进行预览", "请先进行只读预览，再选择一条明细进行人工校正。", parent=self.root)
             return
         stale = self._preview_problem(preview)
         if stale:
             self._show_stale_preview(stale, notify=True)
             return
         if preview.resume_pending:
-            messagebox.showinfo("先完成上次处理", "恢复期间固定使用上次保存的校正，请先完成该次运行。")
+            messagebox.showinfo("先完成上次处理", "恢复期间固定使用上次保存的校正，请先完成该次运行。", parent=self.root)
             return
         if clicked:
             self.tree.selection_set(clicked)
         selected = self.tree.selection()
         if not selected:
-            messagebox.showinfo("选择明细", "请先选中一条需要校正的明细。")
+            messagebox.showinfo("选择明细", "请先选中一条需要校正的明细。", parent=self.root)
             return
         record_index, row_index = map(int, selected[0].split(":"))
         record = preview.payload["records"][record_index]
         original = preview.original_payload["records"][record_index]["rows"][row_index]
         row = record["rows"][row_index]
         dialog = tk.Toplevel(self.root)
+        dialog.withdraw()
         dialog.title(f"人工校正 · 序号 {record['sequence']} 第 {row_index + 1} 条")
         dialog.transient(self.root)
         dialog.geometry("860x540")
         dialog.minsize(720, 500)
         dialog.configure(bg=PALETTE["background"])
-        dialog.grab_set()
         frame = surface(dialog, padding=18)
         frame.pack(fill="both", expand=True)
         frame.columnconfigure(2, weight=1)
@@ -664,6 +665,10 @@ class App:
         actions.grid(row=11, column=0, columnspan=3, sticky="w")
         for label, action in (("保存并检查", save), ("恢复识别值", lambda: save(True)), ("打开原发票", lambda: self._open(record["pdf"])), ("取消", dialog.destroy)):
             ttk.Button(actions, text=label, command=action, style="Primary.TButton" if label == "保存并检查" else "Secondary.TButton").pack(side="left", padx=(0, 8))
+        center_dialog(dialog, self.root)
+        dialog.deiconify()
+        dialog.wait_visibility()
+        dialog.grab_set()
 
     def _apply(self):
         preview = self.preview_result
@@ -865,7 +870,7 @@ class App:
         if self._choosing_input:
             return
         if self.busy:
-            messagebox.showinfo("正在运行", "当前操作结束后再关闭软件，结果会显示在窗口中。")
+            messagebox.showinfo("正在运行", "当前操作结束后再关闭软件，结果会显示在窗口中。", parent=self.root)
             return
         if not self._confirm_discard_corrections("关闭软件"):
             return

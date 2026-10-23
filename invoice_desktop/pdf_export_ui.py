@@ -1,14 +1,16 @@
 """Output chooser with a synchronized portable signature-library summary."""
 import tkinter as tk
 from pathlib import Path
-from tkinter import filedialog, messagebox, ttk
+from tkinter import ttk
 
 from .signature_ui import open_signature_manager
 from .signatures import SLOTS
+from .dialogs import center_dialog, filedialog, messagebox
 
 
 def choose_export_directory(root, workbook, signature_store):
     dialog = tk.Toplevel(root)
+    dialog.withdraw()
     dialog.title("导出验收单与领用单")
     dialog.resizable(True, False)
     dialog.transient(root)
@@ -102,10 +104,9 @@ def choose_export_directory(root, workbook, signature_store):
     start.pack(side="right")
     dialog.bind("<Escape>", lambda event: dialog.destroy())
     dialog.bind("<Configure>", lambda event: note.configure(wraplength=max(240, dialog.winfo_width() - 40)) if event.widget is dialog else None)
-    dialog.update_idletasks()
-    x = root.winfo_rootx() + max(0, (root.winfo_width() - dialog.winfo_width()) // 2)
-    y = root.winfo_rooty() + max(0, (root.winfo_height() - dialog.winfo_height()) // 2)
-    dialog.geometry(f"+{x}+{y}")
+    center_dialog(dialog, root)
+    dialog.deiconify()
+    dialog.wait_visibility()
     dialog.grab_set()
     start.focus_set()
     root.wait_window(dialog)
