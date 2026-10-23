@@ -176,7 +176,8 @@ def build_interface(app, *, execution_steps, necessary_conditions):
         action_buttons.append(button)
         setattr(app, attribute, button)
     action_scale = max(0.75, float(root.tk.call("tk", "scaling")) / (4 / 3))
-    action_gap, group_gap = round(8 * action_scale), round(22 * action_scale)
+    action_gap, group_gap = round(8 * action_scale), round(30 * action_scale)
+    group_divider = tk.Frame(actions, bg="#cbd6e4", bd=0, highlightthickness=0)
     action_layout = None
     def layout_actions(event=None):
         nonlocal action_layout
@@ -188,21 +189,32 @@ def build_interface(app, *, execution_steps, necessary_conditions):
         action_layout = layout
         rows, row, x = [], [], 0
         for index, (button, (width, height)) in enumerate(zip(action_buttons, sizes)):
-            gap = (group_gap if index == 4 else action_gap) if row else 0
+            gap = (group_gap if index == 3 else action_gap) if row else 0
             if row and x + gap + width > available:
                 rows.append(row)
                 row, x, gap = [], 0, 0
-            row.append((button, x + gap, height))
+            row.append((index, button, x + gap, height))
             x += gap + width
         if row:
             rows.append(row)
+        group_divider.place_forget()
         y = 0
-        for row in rows:
-            height = max(item[2] for item in row)
-            for button, x, button_height in row:
+        for row_index, row in enumerate(rows):
+            if row_index:
+                spacing = round(18 * action_scale) if row[0][0] == 3 else action_gap
+                if row[0][0] == 3:
+                    group_divider.place(x=0, y=y + spacing // 2, width=available,
+                                        height=max(1, round(action_scale)))
+                y += spacing
+            height = max(item[3] for item in row)
+            for index, button, x, button_height in row:
                 button.place(x=x, y=y + (height - button_height) // 2)
-            y += height + action_gap
-        actions.configure(height=max(1, y - action_gap))
+                if index == 3 and row[0][0] != 3:
+                    divider_height = max(1, min(round(24 * action_scale), height - round(10 * action_scale)))
+                    group_divider.place(x=x - group_gap // 2, y=y + (height - divider_height) // 2,
+                                        width=max(1, round(action_scale)), height=divider_height)
+            y += height
+        actions.configure(height=max(1, y))
     actions.bind("<Configure>", layout_actions)
     for button in action_buttons:
         button.bind("<Configure>", layout_actions, add="+")

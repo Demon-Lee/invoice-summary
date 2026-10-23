@@ -20,7 +20,7 @@ def open_signature_manager(parent, store):
     previous_status = previous_grab.grab_status() if previous_grab else None
     dialog = tk.Toplevel(parent)
     dialog.withdraw()
-    dialog.title("签名库与角色设置")
+    dialog.title("签名管理")
     dialog.configure(bg=PALETTE["background"])
     dialog.transient(parent.winfo_toplevel())
     manager = _SignatureManager(dialog, store)
@@ -35,7 +35,7 @@ def open_signature_manager(parent, store):
         dialog.deiconify()
         dialog.wait_visibility()
         dialog.grab_set()
-        manager.notebook.focus_set()
+        manager.tab_buttons[manager.active_tab].focus_set()
         parent.wait_window(dialog)
     finally:
         manager.stop_tasks()
@@ -89,22 +89,47 @@ class _SignatureManager:
         frame.pack(fill="both", expand=True)
         frame.rowconfigure(1, weight=1)
         frame.columnconfigure(0, weight=1)
-        header = surface(frame, padding=12)
+        header = surface(frame)
         header.grid(row=0, column=0, sticky="ew", pady=(0, 10))
-        ttk.Label(header, text="签名管理", style="Section.TLabel", font=(FONT, 13, "bold")).pack(anchor="w")
+        ttk.Label(header, text="签名管理", style="Section.TLabel", font=(FONT, 13, "bold")).pack(anchor="w", padx=16, pady=(14, 10))
         style = ttk.Style(dialog)
-        style.configure("Signature.TNotebook", background=PALETTE["background"], borderwidth=0,
-                        tabmargins=(0, 0, 0, 0))
-        style.configure("Signature.TNotebook.Tab", font=(FONT, 10, "bold"), padding=(18, 9),
-                        background=PALETTE["background"], foreground=PALETTE["muted"], borderwidth=0)
-        style.map("Signature.TNotebook.Tab", background=[("selected", PALETTE["surface"]), ("active", "#edf4ff")],
-                  foreground=[("selected", PALETTE["blue"]), ("active", PALETTE["blue"])],
-                  lightcolor=[("selected", PALETTE["surface"])], darkcolor=[("selected", PALETTE["surface"])])
-        self.notebook = ttk.Notebook(frame, style="Signature.TNotebook")
-        self.notebook.grid(row=1, column=0, sticky="nsew")
+        style.layout("SignatureTab.TButton", [("Button.padding", {"sticky": "nswe", "children": [
+            ("Button.label", {"sticky": "nswe"}),
+        ]})])
+        style.configure("SignatureTab.TButton", font=(FONT, 10, "bold"), padding=(18, 10),
+                        background=PALETTE["surface"], foreground=PALETTE["muted"],
+                        anchor="center", width=0, borderwidth=0)
+        style.map("SignatureTab.TButton",
+                  background=[("selected", "focus", "#dceaff"), ("selected", "#edf4ff"),
+                              ("focus", "#e5efff"), ("active", "#f5f8fd"),
+                              ("!disabled", PALETTE["surface"]), ("disabled", PALETTE["surface"])],
+                  foreground=[("selected", PALETTE["blue"]), ("active", PALETTE["blue"]),
+                              ("!disabled", PALETTE["muted"]), ("disabled", PALETTE["muted"])])
+        navigation = tk.Frame(header, bg=PALETTE["surface"])
+        navigation.pack(fill="x", padx=12)
+        self.tab_buttons, self.tab_lines = {}, {}
+        self.active_tab = None
+        for key, title in (("roles", "签字位置"), ("library", "签名库")):
+            item = tk.Frame(navigation, bg=PALETTE["surface"])
+            item.pack(side="left", padx=(0, 8))
+            button = ttk.Button(item, text=title, style="SignatureTab.TButton", cursor="hand2",
+                                command=lambda key=key: self._select_tab(key, focus=True))
+            button.pack(fill="x")
+            line = tk.Frame(item, height=3, bg=PALETTE["surface"], bd=0, highlightthickness=0)
+            line.pack(fill="x")
+            button.bind("<Left>", lambda event: self._cycle_tab(-1))
+            button.bind("<Right>", lambda event: self._cycle_tab(1))
+            button.bind("<Home>", lambda event: self._select_tab("roles", focus=True))
+            button.bind("<End>", lambda event: self._select_tab("library", focus=True))
+            button.bind("<Return>", lambda event, key=key: self._select_tab(key, focus=True))
+            self.tab_buttons[key], self.tab_lines[key] = button, line
+        self.pages_host = ttk.Frame(frame)
+        self.pages_host.grid(row=1, column=0, sticky="nsew")
+        self.pages_host.rowconfigure(0, weight=1)
+        self.pages_host.columnconfigure(0, weight=1)
         scale = max(0.75, float(dialog.tk.call("tk", "scaling")) / (4 / 3))
         def scrollable_page():
-            host = ttk.Frame(self.notebook)
+            host = ttk.Frame(self.pages_host)
             host.rowconfigure(0, weight=1)
             host.columnconfigure(0, weight=1)
             host.columnconfigure(1, minsize=14)
@@ -122,10 +147,10 @@ class _SignatureManager:
             return host, canvas, body
         self.roles_page, self.roles_canvas, roles_body = scrollable_page()
         self.library_page, self.canvas, body = scrollable_page()
-        self.notebook.add(self.roles_page, text="签字位置")
-        self.notebook.add(self.library_page, text="签名库")
-        self.notebook.select(self.roles_page)
-        self.notebook.enable_traversal()
+        self.tab_pages = {"roles": self.roles_page, "library": self.library_page}
+        self._select_tab("roles")
+        dialog.bind("<Control-Tab>", lambda event: self._cycle_tab(1), add="+")
+        dialog.bind("<Control-Shift-Tab>", lambda event: self._cycle_tab(-1), add="+")
         library = surface(body, padding=12)
         library.columnconfigure(0, weight=1)
         library.grid(row=0, column=0, sticky="ew")
@@ -171,32 +196,45 @@ class _SignatureManager:
         self.preview.grid(row=0, column=0, sticky="nsew")
         self.notice = ttk.Label(library, style="Surface.TLabel", foreground="#946522", justify="left", wraplength=550)
         self.notice.grid(row=4, column=0, sticky="ew", pady=(6, 0))
-        roles = surface(roles_body, padding=12)
-        roles.grid(row=0, column=0, sticky="ew")
-        ttk.Label(roles, text="签字位置", style="Section.TLabel").grid(row=0, column=0, columnspan=2, sticky="w", pady=(0, 6))
-        roles.columnconfigure(1, weight=1)
-        style.configure("Signature.TCombobox", font=(FONT, 10), padding=(8, 6),
-                        foreground=PALETTE["text"], fieldbackground=PALETTE["surface"],
-                        background=PALETTE["surface"], bordercolor=PALETTE["line"],
-                        lightcolor=PALETTE["line"], darkcolor=PALETTE["line"], arrowcolor=PALETTE["blue"])
-        style.map("Signature.TCombobox", fieldbackground=[("readonly", PALETTE["surface"])],
-                  bordercolor=[("focus", "#8caff7"), ("active", "#8caff7")])
+        style.configure("SignatureCaption.TLabel", background=PALETTE["surface"], foreground=PALETTE["muted"], font=(FONT, 9, "bold"))
+        style.configure("Signature.TCombobox", font=(FONT, 10), padding=(10, 8), arrowsize=14,
+                        foreground=PALETTE["text"], fieldbackground="#fafbfd", relief="flat", borderwidth=1,
+                        background="#fafbfd", bordercolor="#d9e1eb", lightcolor="#d9e1eb",
+                        darkcolor="#d9e1eb", arrowcolor=PALETTE["blue"])
+        style.map("Signature.TCombobox", fieldbackground=[("disabled", "#f0f3f7"), ("readonly", "#fafbfd")],
+                  selectbackground=[("readonly", "#fafbfd")], selectforeground=[("readonly", PALETTE["text"])],
+                  background=[("disabled", "#f0f3f7"), ("!disabled", "#fafbfd")],
+                  bordercolor=[("focus", "#8caff7"), ("active", "#8caff7")],
+                  lightcolor=[("focus", "#8caff7"), ("active", "#8caff7")],
+                  darkcolor=[("focus", "#8caff7"), ("active", "#8caff7")])
         wheel_events = ("<MouseWheel>", "<Shift-MouseWheel>", "<Button-4>", "<Button-5>")
-        for index, (key, sheet, label) in enumerate(SLOTS):
-            caption = ttk.Label(roles, text=f"{sheet} · {label}", style="Surface.TLabel")
-            caption.grid(row=index * 2 + 1, column=0, columnspan=2, sticky="w", pady=(5, 0))
+        role_cards = {}
+        for key, sheet, label in SLOTS:
+            if sheet not in role_cards:
+                card = surface(roles_body, padding=16)
+                card.grid(row=len(role_cards), column=0, sticky="ew", pady=(0, 12))
+                card.columnconfigure((0, 1), weight=1, uniform="signature-fields")
+                heading = tk.Frame(card, bg=PALETTE["surface"])
+                heading.grid(row=0, column=0, columnspan=2, sticky="ew")
+                tk.Frame(heading, bg=PALETTE["blue"], width=3, height=18).pack(side="left", padx=(0, 8))
+                ttk.Label(heading, text=f"{sheet}单", style="Section.TLabel").pack(side="left")
+                role_cards[sheet] = (card, 0)
+            card, column = role_cards[sheet]
+            padding = (0, 8) if column == 0 else (8, 0)
+            caption = ttk.Label(card, text=label, style="SignatureCaption.TLabel")
+            caption.grid(row=1, column=column, sticky="w", padx=padding, pady=(16, 6))
             self.role_labels[key] = caption
-            combo = ttk.Combobox(roles, state="readonly", width=1, style="Signature.TCombobox")
-            combo.grid(row=index * 2 + 2, column=0, columnspan=2, sticky="ew", pady=(2, 5))
+            combo = ttk.Combobox(card, state="readonly", width=1, style="Signature.TCombobox")
+            combo.grid(row=2, column=column, sticky="ew", padx=padding, pady=(0, 2))
             combo.bind("<<ComboboxSelected>>", lambda event, slot=key: self.assign(slot))
             for sequence in wheel_events:
                 # Widget binding runs before TCombobox's wheel-to-change class binding.
                 combo.bind(sequence, self._scroll_body)
             self.selectors[key] = combo
-        roles.columnconfigure(0, weight=1)
-        self.roles_notice = ttk.Label(roles, style="Surface.TLabel", foreground="#946522",
+            role_cards[sheet] = (card, column + 1)
+        self.roles_notice = ttk.Label(roles_body, style="Notice.TLabel",
                                       justify="left", wraplength=550)
-        self.roles_notice.grid(row=len(SLOTS) * 2 + 1, column=0, columnspan=2, sticky="ew", pady=(8, 0))
+        self.roles_notice.grid(row=len(role_cards), column=0, sticky="ew")
         roles_body.bind("<Configure>", lambda event: self.roles_notice.configure(wraplength=max(100, event.width - 40)), add="+")
         def wrap_text(event):
             for label in (self.preview, self.notice):
@@ -215,6 +253,25 @@ class _SignatureManager:
         self.load()
         self.poll_id = dialog.after(40, self._poll)
 
+    def _select_tab(self, key, *, focus=False):
+        """Switch presentation only; keep the existing drafts and background tasks."""
+        for name, page in self.tab_pages.items():
+            selected = name == key
+            if selected:
+                page.grid(row=0, column=0, sticky="nsew")
+            else:
+                page.grid_remove()
+            self.tab_buttons[name].state(("selected",) if selected else ("!selected",))
+            self.tab_lines[name].configure(bg=PALETTE["blue"] if selected else PALETTE["surface"])
+        self.active_tab = key
+        if focus:
+            self.tab_buttons[key].focus_set()
+        return "break"
+
+    def _cycle_tab(self, direction):
+        keys = tuple(self.tab_pages)
+        return self._select_tab(keys[(keys.index(self.active_tab) + direction) % len(keys)], focus=True)
+
     @staticmethod
     def _wheel_units(event):
         number = getattr(event, "num", None)
@@ -226,7 +283,7 @@ class _SignatureManager:
     def _scroll_body(self, event):
         units = self._wheel_units(event)
         if units:
-            canvas = self.roles_canvas if self.notebook.select() == str(self.roles_page) else self.canvas
+            canvas = self.roles_canvas if self.active_tab == "roles" else self.canvas
             canvas.yview_scroll(units * 3, "units")
         return "break"
 
@@ -312,8 +369,8 @@ class _SignatureManager:
                 notice.grid_remove()
         for key, sheet, role in SLOTS:
             pending = key in attention
-            self.role_labels[key].configure(text=f"{sheet} · {role}" + ("  ·  需确认" if pending else ""),
-                                            foreground="#946522" if pending else PALETTE["text"])
+            self.role_labels[key].configure(text=role + ("  ·  需确认" if pending else ""),
+                                            foreground="#946522" if pending else PALETTE["muted"])
 
     def show_selected(self, event=None):
         if self.busy or self.closed:
