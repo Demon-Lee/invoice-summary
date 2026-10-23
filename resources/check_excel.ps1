@@ -1,16 +1,14 @@
-param([string]$WorkbookInput)
+﻿param([string]$WorkbookInput, [ValidateSet('Auto', 'Excel', 'WPS')][string]$OfficeBackend = 'Auto')
 $ErrorActionPreference = 'Stop'
 [Console]::OutputEncoding = New-Object System.Text.UTF8Encoding($false)
-$invoiceExcel = $null
+. (Join-Path $PSScriptRoot 'office_runtime.ps1')
+$context = $null
 try {
-  $invoiceExcel = New-Object -ComObject Excel.Application
-  $invoiceExcel.Visible = $false
-  $invoiceExcel.DisplayAlerts = $false
-  [Console]::WriteLine('Excel ready')
+  $context = New-InvoiceOfficeContext -Backend $OfficeBackend
+  @{status='ready'; backend=$context.Backend; private_instance=$true} | ConvertTo-Json -Compress | Write-Output
 } finally {
-  if ($null -ne $invoiceExcel) {
-    $invoiceExcel.Quit()
-    [void][Runtime.InteropServices.Marshal]::ReleaseComObject($invoiceExcel)
+  if ($null -ne $context) {
+    Close-InvoiceOfficeContext $context
     [GC]::Collect()
     [GC]::WaitForPendingFinalizers()
   }

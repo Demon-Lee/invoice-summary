@@ -1,11 +1,13 @@
-param(
+﻿param(
     [Parameter(Mandatory=$true)][string]$WorkbookInput,
     [Parameter(Mandatory=$true)][string]$PlanFile,
     [Parameter(Mandatory=$true)][string]$OutputDirectory,
-    [Parameter(Mandatory=$true)][string]$ReportFile
+    [Parameter(Mandatory=$true)][string]$ReportFile,
+    [ValidateSet('Auto', 'Excel', 'WPS')][string]$OfficeBackend = 'Auto'
 )
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'excel_layout.ps1')
+. (Join-Path $PSScriptRoot 'office_runtime.ps1')
 [Console]::OutputEncoding = New-Object System.Text.UTF8Encoding($false)
 
 # No PowerShell callbacks on worker threads: the watchdog is entirely managed C#.
@@ -19,11 +21,12 @@ public sealed class InvoicePdfWatchdog : IDisposable {
     public static extern uint GetWindowThreadProcessId(IntPtr window, out uint processId);
     private readonly int processId;
     private readonly long startTicks;
+    private readonly string processName;
     private readonly Timer timer;
     private int timedOut;
     public bool TimedOut { get { return Interlocked.CompareExchange(ref timedOut, 0, 0) != 0; } }
-    public InvoicePdfWatchdog(int id, long ticks) {
-        processId = id; startTicks = ticks;
+    public InvoicePdfWatchdog(int id, long ticks, string name) {
+        processId = id; startTicks = ticks; processName = name;
         timer = new Timer(OnTimeout, null, 210000, Timeout.Infinite);
     }
     private void OnTimeout(object state) {
@@ -33,7 +36,7 @@ public sealed class InvoicePdfWatchdog : IDisposable {
     public void StopOwned() {
         try {
             using (Process process = Process.GetProcessById(processId)) {
-                if (String.Equals(process.ProcessName, "EXCEL", StringComparison.OrdinalIgnoreCase)
+                if (String.Equals(process.ProcessName, processName, StringComparison.OrdinalIgnoreCase)
                     && process.StartTime.ToUniversalTime().Ticks == startTicks) {
                     process.Kill();
                     process.WaitForExit(5000);
@@ -408,18 +411,19 @@ try {
     $plan = Get-Content -LiteralPath $PlanFile -Raw -Encoding UTF8 | ConvertFrom-Json
     if (@($plan.sheets).Count -ne 2) { throw 'Expected exactly two export worksheets.' }
     $helperStarted = [Diagnostics.Process]::GetCurrentProcess().StartTime.ToUniversalTime()
-    $excel = New-Object -ComObject Excel.Application
+    $officeContext = New-InvoiceOfficeContext -Backend $OfficeBackend
+    $excel = $officeContext.Application
     $excelProcessId = [uint32]0
     [void][InvoicePdfWatchdog]::GetWindowThreadProcessId([IntPtr]$excel.Hwnd, [ref]$excelProcessId)
     $excelProcess = Get-Process -Id $excelProcessId -ErrorAction Stop
     $excelStarted = $excelProcess.StartTime.ToUniversalTime()
-    if ($excelProcess.ProcessName -ine 'EXCEL' -or $excelStarted -lt $helperStarted) {
+    if ($excelProcess.ProcessName -ine $officeContext.ProcessName -or $excelStarted -lt $helperStarted) {
         throw 'Cannot confirm a private Excel instance. Close Excel and retry.'
     }
     $books = $excel.Workbooks
     if ($books.Count -ne 0) { throw 'Excel instance already has workbooks. Close Excel and retry.' }
     $owned = $true
-    $guard = [InvoicePdfWatchdog]::new([int]$excelProcessId, [long]$excelStarted.Ticks)
+    $guard = [InvoicePdfWatchdog]::new([int]$excelProcessId, [long]$excelStarted.Ticks, [string]$officeContext.ProcessName)
     $excelProcess.Dispose()
     $excel.Visible = $false
     $excel.DisplayAlerts = $false

@@ -14,6 +14,7 @@ from openpyxl.utils.cell import coordinate_to_tuple
 from pdfplumber.utils import extract_text
 
 _EDGE_TOLERANCE = 0.75  # PDF points: rounding/font bearings, never a whole glyph.
+_BORDER_CLUSTER_TOLERANCE = 1.0  # Paired paths of one printed border; text checks remain strict.
 
 
 def _error(name, message):
@@ -110,11 +111,11 @@ def _printed_columns(pdf, sheet, native):
                 and edge['top'] <= middle <= edge['bottom'])
     clusters = []
     for value in xs:
-        if not clusters or value - clusters[-1][-1] > .8:
+        if not clusters or value - clusters[-1][-1] > _BORDER_CLUSTER_TOLERANCE:
             clusters.append([value])
         else:
             clusters[-1].append(value)
-    printed = [sum(group) / len(group) for group in clusters]
+    printed = [(min(group) + max(group)) / 2 for group in clusters]
     if len(printed) != len(headers) + 1:
         return identity
     for index, (_, cell, box) in enumerate(headers):
@@ -178,7 +179,7 @@ def _printed_rows(pdf, sheet, native, printed_x):
                           and e['x1'] >= left and e['x0'] <= right)
         clusters = []
         for segment in segments:
-            if not clusters or segment[0] - clusters[-1][-1][0] > .8:
+            if not clusters or segment[0] - clusters[-1][-1][0] > _BORDER_CLUSTER_TOLERANCE:
                 clusters.append([segment])
             else:
                 clusters[-1].append(segment)
@@ -190,7 +191,9 @@ def _printed_rows(pdf, sheet, native, printed_x):
                     break
                 cursor = max(cursor, x1)
             if cursor >= right - _EDGE_TOLERANCE:
-                physical.append(sum(item[0] for item in group) / len(group))
+                # PDF border rectangles can repeat short segments at joins.
+                # Use the stroke pair's center, independent of duplicate paths.
+                physical.append((min(item[0] for item in group) + max(item[0] for item in group)) / 2)
         candidates = [i for i, y in enumerate(physical) if abs(y - logical[0]) <= 2]
         if len(candidates) != 1:
             continue

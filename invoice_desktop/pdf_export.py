@@ -195,11 +195,11 @@ def export_workbook_pdfs(workbook, directory, approved, *, progress=None, excel=
         stage = Path(tempfile.mkdtemp(prefix=".invoice-pdf-stage-", dir=directory)).resolve()
         plan_file, report_file = scratch / "plan.json", scratch / "report.json"
         plan_file.write_text(json.dumps(plan, ensure_ascii=False), encoding="utf-8")
-        progress("正在通过 Excel 导出验收单和领用单，请稍候…")
+        progress("正在通过表格软件导出验收单和领用单，请稍候…")
         (excel or ExcelAdapter()).export_pdf(snapshot, plan_file, stage, report_file)
         report = json.loads(report_file.read_text(encoding="utf-8-sig"))
         if report.get("status") != "completed" or report.get("sheets") != plan["sheets"]:
-            raise ValueError("Excel 导出结果不完整，未替换已有 PDF")
+            raise ValueError("表格软件导出结果不完整，未替换已有 PDF")
         # Always prove the unsigned PDF before signature insertion can run.
         files = _validate_pdfs(stage, plan, report, source_cells)
         if signatures is not None:

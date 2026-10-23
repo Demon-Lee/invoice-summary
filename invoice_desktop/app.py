@@ -31,7 +31,7 @@ EXECUTION_STEPS = (
     "4. 查看完成提示与金额复核；需要时点击“导出 PDF”。",
 )
 NECESSARY_CONDITIONS = (
-    "Windows 10/11，已安装 Microsoft Excel 桌面版。",
+    "Windows 10/11，已安装 WPS 表格或 Microsoft Excel 桌面版。",
     "有文本层的电子 PDF，不支持扫描件；选择完整批次。",
     "约定格式的 .xlsx，含“验收”“领用”、表头、日期与三行页脚。",
     "执行前关闭目标工作簿；软件和输入文件所在目录须可写。",
@@ -80,7 +80,7 @@ class App:
         self.pdf = tk.StringVar()
         self.book = tk.StringVar()
         self.status = tk.StringVar(value="选择文件，然后进行只读预览")
-        self.summary = tk.StringVar(value="文件在本机处理 · Microsoft Excel 桌面版必需")
+        self.summary = tk.StringVar(value="文件在本机处理 · 优先 WPS，其次 Excel")
         self.metric_invoices = tk.StringVar(value="—")
         self.metric_rows = tk.StringVar(value="—")
         self.metric_total = tk.StringVar(value="—")
@@ -810,7 +810,8 @@ class App:
             self._pdf_report_base = current_report
         self._execute_before_export = str(self.execute.cget("state"))
         self._correction_hint_before_export = self._correction_hint_enabled
-        self._run(lambda: export_workbook_pdfs(workbook, directory, approved, expected_workbook_sha256=receipt["sha256"],
+        self._run(lambda: export_workbook_pdfs(workbook, directory, approved, excel=self.controller.excel,
+                                              expected_workbook_sha256=receipt["sha256"],
                                               signatures=options["signatures"],
                                               progress=lambda msg: self.events.put(("progress", msg))),
                   self._render_pdf_result, stage="export")

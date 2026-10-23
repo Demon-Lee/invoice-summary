@@ -49,13 +49,33 @@ def load_engine(directory, name):
 
 
 class ExcelAdapter:
+    def __init__(self, backend="Auto"):
+        choices = {"auto": "Auto", "excel": "Excel", "wps": "WPS"}
+        if not isinstance(backend, str) or backend.lower() not in choices:
+            raise ValueError("不支持的表格软件类型")
+        self.requested_backend = self.backend = choices[backend.lower()]
+
+    def _pin_backend(self, output):
+        try:
+            result = json.loads(output)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("表格软件就绪检查结果无效") from exc
+        if (not isinstance(result, dict) or result.get("status") != "ready"
+                or result.get("private_instance") is not True
+                or result.get("backend") not in ("Excel", "WPS")
+                or (self.requested_backend != "Auto" and result.get("backend") != self.requested_backend)):
+            raise ValueError("表格软件就绪检查结果无效")
+        self.backend = result["backend"]
+
     def _run(self, script, extra, *, timeout=240):
-        args = ["powershell.exe", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", str(script), *extra]
+        args = ["powershell.exe", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", str(script), *extra,
+                "-OfficeBackend", self.backend]
+        label = "表格软件" if self.backend == "Auto" else self.backend
         try:
             result = subprocess.run(args, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=timeout,
                                     creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
         except (OSError, subprocess.TimeoutExpired) as exc:
-            raise ValueError(f"Excel 操作未完成：{exc}") from exc
+            raise ValueError(f"{label} 操作未完成：{exc}") from exc
         if result.returncode:
             details = (result.stderr or '') + '\n' + (result.stdout or '')
             timed_out = re.search(r'INVOICE_FORMAT_TIMEOUT stage=(\w+) elapsed=([0-9.]+)s sheet=([^\r\n]*)', details)
@@ -64,22 +84,24 @@ class ExcelAdapter:
                 label = {'open': '打开工作簿', 'initial': '首次排版', 'calculate': '公式重算',
                          'final': '复核排版', 'save': '保存排版'}.get(stage, '自动排版')
                 location = f'，{sheet.strip()}' if sheet.strip() else ''
-                raise ValueError(f'Excel 排版超时（{elapsed}秒，{label}{location}）。'
+                raise ValueError(f'表格软件排版超时（{elapsed}秒，{label}{location}）。'
                                  '本次排版副本未写回；请保留本次报告以便排查。')
-            raise ValueError("Excel 不可用或操作失败：" + (result.stderr or result.stdout).strip()[-2000:])
+            raise ValueError(label + " 不可用或操作失败：" + (result.stderr or result.stdout).strip()[-2000:])
+        return result.stdout
 
     def check(self, workbook):
         if os.name != "nt":
-            raise ValueError("此版本仅支持 Windows 与 Microsoft Excel 桌面版")
+            raise ValueError("此版本需要 Windows 与 WPS 表格或 Microsoft Excel 桌面版")
         kernel = ctypes.WinDLL("kernel32", use_last_error=True)
         kernel.CreateFileW.argtypes = [ctypes.c_wchar_p, ctypes.c_uint32, ctypes.c_uint32, ctypes.c_void_p, ctypes.c_uint32, ctypes.c_uint32, ctypes.c_void_p]
         kernel.CreateFileW.restype = ctypes.c_void_p
         kernel.CloseHandle.argtypes = [ctypes.c_void_p]
         handle = kernel.CreateFileW(str(workbook), 0x80000000 | 0x40000000, 0, None, 3, 0, None)
         if handle == ctypes.c_void_p(-1).value:
-            raise ValueError("工作簿被占用或没有写入权限，请关闭 Excel 中的该文件后重新预览")
+            raise ValueError("工作簿被占用或没有写入权限，请关闭 WPS 或 Excel 中的该文件后重新预览")
         kernel.CloseHandle(handle)
-        self._run(resource_root() / "resources/check_excel.ps1", [])
+        self.backend = self.requested_backend
+        self._pin_backend(self._run(resource_root() / "resources/check_excel.ps1", []))
 
     def apply(self, script, workbook):
         from .layout import layout_plan
@@ -466,7 +488,7 @@ class Controller:
                 finally:
                     writer_plan.workbook.close()
                 result["completed"].append("两表重填已在上次完成" if skip_write else "清空旧明细并重填两表")
-                self.progress("正在应用字体、调整单元格完整显示并通过 Excel 重算…")
+                self.progress("正在应用字体、调整单元格完整显示并通过表格软件重算…")
                 self.excel.apply(self.engine_dir / "apply_mixed_fonts_excel.ps1", preview.workbook)
                 result["completed"].append("字体、完整显示排版与重算")
                 self.progress("正在逐票核对金额与两张表的总计…")

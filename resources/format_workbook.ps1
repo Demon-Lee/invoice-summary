@@ -1,10 +1,12 @@
-param(
+﻿param(
     [Parameter(Mandatory=$true)][string]$WorkbookInput,
-    [Parameter(Mandatory=$true)][string]$PlanFile
+    [Parameter(Mandatory=$true)][string]$PlanFile,
+    [ValidateSet('Auto', 'Excel', 'WPS')][string]$OfficeBackend = 'Auto'
 )
 $ErrorActionPreference = 'Stop'
 [Console]::OutputEncoding = New-Object System.Text.UTF8Encoding($false)
 . (Join-Path $PSScriptRoot 'excel_layout.ps1')
+. (Join-Path $PSScriptRoot 'office_runtime.ps1')
 
 # The timer runs managed C# only; no PowerShell callback uses a worker thread.
 Add-Type -TypeDefinition @'
@@ -17,11 +19,12 @@ public sealed class InvoiceFormatWatchdog : IDisposable {
     public static extern uint GetWindowThreadProcessId(IntPtr window, out uint processId);
     private readonly int processId;
     private readonly long startTicks;
+    private readonly string processName;
     private readonly Timer timer;
     private int timedOut;
     public bool TimedOut { get { return Interlocked.CompareExchange(ref timedOut, 0, 0) != 0; } }
-    public InvoiceFormatWatchdog(int id, long ticks) {
-        processId = id; startTicks = ticks;
+    public InvoiceFormatWatchdog(int id, long ticks, string name) {
+        processId = id; startTicks = ticks; processName = name;
         timer = new Timer(OnTimeout, null, 210000, Timeout.Infinite);
     }
     private void OnTimeout(object state) {
@@ -31,7 +34,7 @@ public sealed class InvoiceFormatWatchdog : IDisposable {
     public void StopOwned() {
         try {
             using (Process process = Process.GetProcessById(processId)) {
-                if (String.Equals(process.ProcessName, "EXCEL", StringComparison.OrdinalIgnoreCase)
+                if (String.Equals(process.ProcessName, processName, StringComparison.OrdinalIgnoreCase)
                     && process.StartTime.ToUniversalTime().Ticks == startTicks) {
                     process.Kill();
                     process.WaitForExit(5000);
@@ -57,18 +60,19 @@ try {
         throw 'Expected schema version 1 and exactly two formatting worksheets.'
     }
     $helperStarted = [Diagnostics.Process]::GetCurrentProcess().StartTime.ToUniversalTime()
-    $excel = New-Object -ComObject Excel.Application
+    $officeContext = New-InvoiceOfficeContext -Backend $OfficeBackend
+    $excel = $officeContext.Application
     $excelProcessId = [uint32]0
     [void][InvoiceFormatWatchdog]::GetWindowThreadProcessId([IntPtr]$excel.Hwnd, [ref]$excelProcessId)
     $excelProcess = Get-Process -Id $excelProcessId -ErrorAction Stop
     $excelStarted = $excelProcess.StartTime.ToUniversalTime()
-    if ($excelProcess.ProcessName -ine 'EXCEL' -or $excelStarted -lt $helperStarted) {
+    if ($excelProcess.ProcessName -ine $officeContext.ProcessName -or $excelStarted -lt $helperStarted) {
         throw 'Cannot confirm a private Excel instance. Close Excel and retry.'
     }
     $books = $excel.Workbooks
     if ($books.Count -ne 0) { throw 'Excel instance already has workbooks. Close Excel and retry.' }
     $owned = $true
-    $guard = [InvoiceFormatWatchdog]::new([int]$excelProcessId, [long]$excelStarted.Ticks)
+    $guard = [InvoiceFormatWatchdog]::new([int]$excelProcessId, [long]$excelStarted.Ticks, [string]$officeContext.ProcessName)
     $excelProcess.Dispose()
     $excelProcess = $null
     $excel.Visible = $false
