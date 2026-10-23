@@ -7,6 +7,7 @@ import io
 import hashlib
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -56,6 +57,15 @@ class ExcelAdapter:
         except (OSError, subprocess.TimeoutExpired) as exc:
             raise ValueError(f"Excel 操作未完成：{exc}") from exc
         if result.returncode:
+            details = (result.stderr or '') + '\n' + (result.stdout or '')
+            timed_out = re.search(r'INVOICE_FORMAT_TIMEOUT stage=(\w+) elapsed=([0-9.]+)s sheet=([^\r\n]*)', details)
+            if timed_out:
+                stage, elapsed, sheet = timed_out.groups()
+                label = {'open': '打开工作簿', 'initial': '首次排版', 'calculate': '公式重算',
+                         'final': '复核排版', 'save': '保存排版'}.get(stage, '自动排版')
+                location = f'，{sheet.strip()}' if sheet.strip() else ''
+                raise ValueError(f'Excel 排版超时（{elapsed}秒，{label}{location}）。'
+                                 '本次排版副本未写回；请保留本次报告以便排查。')
             raise ValueError("Excel 不可用或操作失败：" + (result.stderr or result.stdout).strip()[-2000:])
 
     def check(self, workbook):

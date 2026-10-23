@@ -128,6 +128,7 @@ def sheet_layout(ws):
         "last_detail_row": detail_rows[-1], "print_end_row": last_row,
         "print_end_column": last_col, "print_area": f"A1:{get_column_letter(last_col)}{last_row}",
         "numeric_columns": [columns[k] for k in ("序号", "数量", "单价", "金额")],
+        "general_cells": [cells[key].coordinate for key in sorted(cells) if cells[key].number_format == "General"],
         "content_cells": [cells[key].coordinate for key in sorted(cells)],
         "columns": columns, "tail_start_row": detail_rows[-1], "tail_end_row": last_row,
         "repeat_start_row": repeat_start, "repeat_end_row": repeat_end,

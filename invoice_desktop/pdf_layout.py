@@ -141,6 +141,81 @@ def _printed_columns(pdf, sheet, native):
     return transform
 
 
+def _printed_rows(pdf, sheet, native, printed_x):
+    """Match contiguous native table rows to physical horizontal grid lines.
+
+    Pixel rounding accumulates down a long Excel table. Require every table
+    row band, contiguous bounds, and a matching physical border sequence;
+    otherwise keep the original geometry and its strict text checks.
+    """
+    mappings = {}
+    bands = native.get('row_bands', [])
+    if not isinstance(bands, list):
+        return mappings
+    expected = set()
+    for row in range(sheet['header_row'], sheet['footer_row'] + 1):
+        pages = range(1, len(pdf.pages) + 1) if row <= sheet['repeat_end_row'] else [bisect_right(native['break_rows'], row) + 1]
+        expected.update((row, page) for page in pages)
+    if (any(not isinstance(b, Mapping) or not isinstance(b.get('row'), int) or not isinstance(b.get('page'), int)
+            or not isinstance(b.get('top'), (int, float)) or not isinstance(b.get('bottom'), (int, float)) for b in bands)
+            or len(bands) != len(expected) or {(b['row'], b['page']) for b in bands} != expected):
+        return mappings
+    header_cells = [c for c in native['cells']
+                    if coordinate_to_tuple(c['address'])[0] == sheet['header_row'] and c['page'] == 1]
+    if not header_cells:
+        return mappings
+    left = min(printed_x(c['box'][0]) for c in header_cells)
+    right = max(printed_x(c['box'][2]) for c in header_cells)
+    for number, page in enumerate(pdf.pages, 1):
+        rows = sorted((b for b in bands if b.get('page') == number), key=lambda b: b['row'])
+        if not rows or any(abs(a['bottom'] - b['top']) > .1 for a, b in zip(rows, rows[1:])):
+            continue
+        logical = [float(rows[0]['top'])] + [float(b['bottom']) for b in rows]
+        if any(not math.isfinite(y) for y in logical) or any(b <= a for a, b in zip(logical, logical[1:])):
+            continue
+        segments = sorted((float(e['top']), float(e['x0']), float(e['x1'])) for e in page.edges
+                          if abs(e['bottom'] - e['top']) < .1 and e.get('width', 0) > 0
+                          and e['x1'] >= left and e['x0'] <= right)
+        clusters = []
+        for segment in segments:
+            if not clusters or segment[0] - clusters[-1][-1][0] > .8:
+                clusters.append([segment])
+            else:
+                clusters[-1].append(segment)
+        physical = []
+        for group in clusters:
+            cursor = left
+            for _, x0, x1 in sorted(group, key=lambda item: item[1]):
+                if x0 > cursor + _EDGE_TOLERANCE:
+                    break
+                cursor = max(cursor, x1)
+            if cursor >= right - _EDGE_TOLERANCE:
+                physical.append(sum(item[0] for item in group) / len(group))
+        candidates = [i for i, y in enumerate(physical) if abs(y - logical[0]) <= 2]
+        if len(candidates) != 1:
+            continue
+        printed = physical[candidates[0]:candidates[0] + len(logical)]
+        if len(printed) != len(logical):
+            continue
+        if any(abs((b - a) - (d - c)) > _EDGE_TOLERANCE
+               for a, b, c, d in zip(printed, printed[1:], logical, logical[1:])):
+            continue
+        mappings[number] = logical, printed
+    return mappings
+
+
+def _mapped_row(value, edges):
+    if edges is None:
+        return value
+    logical, printed = edges
+    if value <= logical[0]:
+        return value + printed[0] - logical[0]
+    if value >= logical[-1]:
+        return value + printed[-1] - logical[-1]
+    index = bisect_right(logical, value) - 1
+    return printed[index] + (value - logical[index]) * (printed[index + 1] - printed[index]) / (logical[index + 1] - logical[index])
+
+
 def validate_pdf_layout(pdf, sheet, native, source):
     """Validate native coverage and every expected PDF cell occurrence.
 
@@ -185,6 +260,7 @@ def validate_pdf_layout(pdf, sheet, native, source):
     if not isinstance(cells, list):
         _error(name, "缺少逐单元格排版证明")
     printed_x = _printed_columns(pdf, sheet, native)
+    printed_rows = _printed_rows(pdf, sheet, native, printed_x)
     seen = set()
     used_chars = {}
     for cell in cells:
@@ -200,7 +276,8 @@ def validate_pdf_layout(pdf, sheet, native, source):
         if page.rotation or any(abs(a - b) > 0.1 for a, b in zip(page.bbox, (0, 0, page.width, page.height))):
             _error(name, f"第 {page_number} 页旋转或坐标原点不受支持")
         left, top, right, bottom = _box(cell.get("box"), page, name, address)
-        box = _box((printed_x(left), top, printed_x(right), bottom), page, name, address)
+        box = _box((printed_x(left), _mapped_row(top, printed_rows.get(page_number)),
+                    printed_x(right), _mapped_row(bottom, printed_rows.get(page_number))), page, name, address)
         display = cell.get("text")
         orientation = cell.get("orientation")
         if (not isinstance(display, str) or isinstance(orientation, bool)

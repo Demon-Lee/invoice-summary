@@ -5,6 +5,7 @@ param(
     [Parameter(Mandatory=$true)][string]$ReportFile
 )
 $ErrorActionPreference = 'Stop'
+. (Join-Path $PSScriptRoot 'excel_layout.ps1')
 [Console]::OutputEncoding = New-Object System.Text.UTF8Encoding($false)
 
 # No PowerShell callbacks on worker threads: the watchdog is entirely managed C#.
@@ -285,6 +286,28 @@ function Get-NativeLayout($application, $worksheet, $pageSetup, $geometry) {
             $horizontalOffset += ($availableWidth - $printWidth * $scale) / 2.0
         }
         $cellProofs = New-Object 'System.Collections.Generic.List[object]'
+        $rowBands = New-Object 'System.Collections.Generic.List[object]'
+        for ($row = $headerRow; $row -le [int]$geometry.footer_row; $row++) {
+            $rowRange = $null
+            try {
+                $rowRange = $worksheet.Range([string]$row + ':' + [string]$row)
+                $nativePage = 1
+                for ($pageIndex = 1; $pageIndex -lt $pageCount; $pageIndex++) {
+                    if ($row -ge [int]$pageStarts[$pageIndex]) { $nativePage = $pageIndex + 1 }
+                }
+                $targets = @($nativePage)
+                if ($row -ge $repeatStart -and $row -le $repeatEnd) { $targets = @(1..$pageCount) }
+                foreach ($pageNumber in $targets) {
+                    if ($pageNumber -eq 1) { $top = $topMargin + ([double]$rowRange.Top - $originTop) * $scale }
+                    elseif ($row -le $repeatEnd) { $top = $topMargin + ([double]$rowRange.Top - $titleTop) * $scale }
+                    else {
+                        $startRow = [int]$pageStarts[$pageNumber - 1]
+                        $top = $topMargin + ($titleHeight + [double]$rowRange.Top - $pageTops[$startRow]) * $scale
+                    }
+                    $rowBands.Add(@{ row = $row; page = $pageNumber; top = $top; bottom = $top + [double]$rowRange.Height * $scale })
+                }
+            } finally { Release-Com $rowRange }
+        }
         $seen = @{}
         foreach ($address in $geometry.content_cells) {
             $cell = $area = $areaRows = $areaColumns = $null
@@ -372,7 +395,7 @@ function Get-NativeLayout($application, $worksheet, $pageSetup, $geometry) {
             name = [string]$geometry.name; zoom = [int]$zoom; base_zoom = [int]$baseZoom
             expected_pages = [int]$pageCount; break_rows = @($nativeBreaks.rows)
             repeat_start_row = $repeatStart; repeat_end_row = $repeatEnd
-            tail_start_row = $tailStart; tail_end_row = $tailEnd; cells = @($cellProofs.ToArray())
+            tail_start_row = $tailStart; tail_end_row = $tailEnd; cells = @($cellProofs.ToArray()); row_bands = @($rowBands.ToArray())
         }
     } finally { Release-Com $titleRange; Release-Com $printRange }
 }
@@ -380,6 +403,7 @@ function Get-NativeLayout($application, $worksheet, $pageSetup, $geometry) {
 $excel = $books = $book = $sheet = $setup = $sheets = $guard = $null
 $owned = $false
 $originalPrinter = $null
+$priorCalculation = $null
 try {
     $plan = Get-Content -LiteralPath $PlanFile -Raw -Encoding UTF8 | ConvertFrom-Json
     if (@($plan.sheets).Count -ne 2) { throw 'Expected exactly two export worksheets.' }
@@ -403,6 +427,9 @@ try {
     $excel.AskToUpdateLinks = $false
     $excel.AutomationSecurity = 3
     $book = $books.Open($WorkbookInput, 0, $true)
+    $priorCalculation = $excel.Calculation
+    $excel.Calculation = -4135
+    $formulaSnapshot = Get-InvoiceFormulaSnapshot $book $plan
     $originalPrinter = Select-ExportPrinter $excel
     $sheets = $book.Worksheets
     $layoutReports = New-Object 'System.Collections.Generic.List[object]'
@@ -412,7 +439,60 @@ try {
             $sheet.Visible = -1
             [void]$sheet.Select($true)
             $setup = $sheet.PageSetup
+            # Freeze only General's display via a literal number format in
+            # this read-only export instance. Values/formulas stay numeric,
+            # preserving conditional formatting and existing custom formats.
+            $frozen = @{}
+            foreach ($address in @($item.general_cells)) {
+                $numberCell = $null
+                try {
+                    $numberCell = $sheet.Range([string]$address)
+                    $value = $numberCell.Value2
+                    if ($null -ne $value -and $value -is [ValueType] -and $value -isnot [bool]) {
+                        $wasFormula = [bool]$numberCell.HasFormula
+                        $display = [string]$numberCell.Text
+                        if ($display -match '"') { throw 'Unsupported quote in General numeric display.' }
+                        $frozen[[string]$address] = $display
+                        $numberCell.NumberFormat = '"' + $display + '"'
+                        if ([bool]$numberCell.HasFormula -ne $wasFormula -or -not [Object]::Equals($numberCell.Value2, $value)) {
+                            throw ('Cannot retain numeric print value: ' + [string]$address)
+                        }
+                    }
+                } finally { Release-Com $numberCell }
+            }
+            # Native AutoFit needs the final literal display before computing
+            # PDF widths; this affects only the read-only export instance.
+            Fit-InvoiceContent $book $item
+            $padded = @{}
+            foreach ($index in @($item.numeric_columns)) {
+                $numberColumn = $allColumns = $null
+                try {
+                    $allColumns = $sheet.Columns
+                    $numberColumn = $allColumns.Item([int]$index)
+                    $numberColumn.ColumnWidth = [Math]::Min(255.0, [double]$numberColumn.ColumnWidth + 2.0)
+                    $padded[[int]$index] = $true
+                } finally { Release-Com $numberColumn; Release-Com $allColumns }
+            }
+            foreach ($address in $frozen.Keys) {
+                $numberCell = $numberColumn = $null
+                try {
+                    $numberCell = $sheet.Range([string]$address)
+                    $columnIndex = [int]$numberCell.Column
+                    if (-not $padded.ContainsKey($columnIndex)) {
+                        $numberColumn = $numberCell.EntireColumn
+                        # Printer font bearings need a small reserve beyond
+                        # screen AutoFit. Only the export copy gets this space.
+                        $numberColumn.ColumnWidth = [Math]::Min(255.0, [double]$numberColumn.ColumnWidth + 2.0)
+                        $padded[$columnIndex] = $true
+                    }
+                    if ([string]$numberCell.Text -cne [string]$frozen[$address]) { throw ('Cannot fit numeric print display: ' + $address) }
+                } finally { Release-Com $numberColumn; Release-Com $numberCell }
+            }
             $layout = Get-NativeLayout $excel $sheet $setup $item
+            # Clear Excel's stale-value display after temporary width/format
+            # edits, and reject any actual formula-result change before print.
+            [void]$excel.Calculate()
+            Assert-InvoiceFormulaSnapshot $book $formulaSnapshot 'before PDF printing'
             $output = Join-Path $OutputDirectory ([string]$item.file_name)
             [void]$sheet.ExportAsFixedFormat(0, $output, 0, $false, $false, [Type]::Missing, [Type]::Missing, $false)
             if ($guard.TimedOut) { throw 'PDF export timed out. Retry after closing the workbook.' }
@@ -432,6 +512,7 @@ try {
     # Restore while the temporary workbook is still open: Excel may reject
     # ActivePrinter changes when its Workbooks collection is empty.
     try { if ($owned -and $null -ne $book -and $originalPrinter) { $excel.ActivePrinter = $originalPrinter } } catch { }
+    try { if ($owned -and $null -ne $priorCalculation) { $excel.Calculation = $priorCalculation } } catch { }
     try { if ($null -ne $book) { [void]$book.Close($false) } } catch { }
     Release-Com $setup
     Release-Com $sheet

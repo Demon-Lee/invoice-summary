@@ -1,7 +1,10 @@
 # Native content fitting library. Dot-sourcing this file only defines functions.
 function Release-InvoiceLayoutCom($value) {
     if ($null -ne $value -and [Runtime.InteropServices.Marshal]::IsComObject($value)) {
-        [void][Runtime.InteropServices.Marshal]::ReleaseComObject($value)
+        # A disconnected server must not replace the primary operation error.
+        try { [void][Runtime.InteropServices.Marshal]::ReleaseComObject($value) }
+        catch [Runtime.InteropServices.COMException] { }
+        catch [Runtime.InteropServices.InvalidComObjectException] { }
     }
 }
 
@@ -80,328 +83,110 @@ function Assert-InvoiceFormulaSnapshot($book, $snapshots, [string]$phase) {
     }
 }
 
-function Set-InvoiceColumnPoints($column, [double]$points, [string]$context) {
-    # ColumnWidth uses font character units; Width uses points. Search the
-    # actual Excel geometry, always rounding toward a wider measurement cell.
-    if ($points -le 0) { throw ($context + ': invalid column width.') }
-    $column.ColumnWidth = 255
-    if ([double]$column.Width + 0.05 -lt $points) {
-        throw ($context + ': required column width exceeds the Excel limit.')
-    }
-    $low = 0.0
-    $high = 255.0
-    for ($step = 0; $step -lt 18; $step++) {
-        $middle = ($low + $high) / 2.0
-        $column.ColumnWidth = $middle
-        if ([double]$column.Width -lt $points) { $low = $middle } else { $high = $middle }
-    }
-    $column.ColumnWidth = $high
-    if ([double]$column.Width + 0.05 -lt $points) {
-        throw ($context + ': Excel could not apply the required column width.')
-    }
-}
-
-function Set-InvoiceRowMinimumPoints($row, [double]$minimum) {
-    # Verify geometric Height, the same property used for merged-area checks
-    # and PDF coordinates. RowHeight is the writable setting and can report a
-    # slightly different rounded value; it cannot prove actual content space.
-    # Keep the real capacity check in the caller for vertically merged cells.
-    $minimum = [Math]::Min(409.0, $minimum)
-    $requested = $minimum
-    while ($true) {
-        $row.RowHeight = $requested
-        $actual = [double]$row.Height
-        if ($actual + 0.05 -ge $minimum -or $requested -ge 409.0) { return }
-        $requested = [Math]::Min(409.0, [Math]::Max($requested + 1.0, [Math]::Ceiling($minimum) + 1.0))
-    }
-}
-
-function Copy-InvoiceProbe($source, $probe) {
-    $used = $target = $copied = $null
-    try {
-        $used = $probe.UsedRange
-        [void]$used.UnMerge()
-        [void]$used.Clear()
-        $target = $probe.Range('A1')
-        # Copying the source range, then unmerging ONLY the probe, retains rich
-        # text runs, number formats, indentation, and orientation for AutoFit.
-        [void]$source.Copy($target)
-        $copied = $probe.UsedRange
-        [void]$copied.UnMerge()
-        return ,$target
-    } catch {
-        Release-InvoiceLayoutCom $target
-        throw
-    } finally {
-        Release-InvoiceLayoutCom $used
-        Release-InvoiceLayoutCom $copied
-    }
-}
-
-function Set-InvoiceProbeValue($target, $value, [string]$context) {
-    # Formula results can themselves begin with '='. Write strings as literal
-    # text, then restore the copied display format before measuring them.
-    $format = $target.NumberFormat
-    try {
-        if ($value -is [string]) { $target.NumberFormat = '@' }
-        $target.Value2 = $value
-    } finally {
-        if ($value -is [string]) { $target.NumberFormat = $format }
-    }
-    if ([bool]$target.HasFormula) { throw ($context + ': probe value was interpreted as a formula.') }
-    $actual = $target.Value2
-    # Excel may store a zero-length string as a genuinely empty cell.
-    $empty = $value -is [string] -and $value.Length -eq 0 -and
-        ($null -eq $actual -or [Object]::Equals($actual, ''))
-    if (-not $empty -and -not [Object]::Equals($value, $actual)) {
-        throw ($context + ': probe did not retain the calculated scalar value.')
-    }
-}
-
-function Measure-InvoiceCell($cell, $area, $probe, [double]$width, [bool]$measureWidth, [string]$context, [bool]$useCapturedValue = $false, $capturedValue = $null) {
-    $target = $probeColumn = $probeRow = $null
-    try {
-        $target = Copy-InvoiceProbe $area $probe
-        # A copied formula can acquire relative references on the probe. Its
-        # current value is enough to measure the unchanged source display.
-        if ($useCapturedValue) {
-            Set-InvoiceProbeValue $target $capturedValue $context
-        } elseif ([bool]$cell.HasFormula) {
-            Set-InvoiceProbeValue $target $cell.Value2 $context
-        }
-        $target.ShrinkToFit = $false
-        $probeColumn = $target.EntireColumn
-        $probeRow = $target.EntireRow
-        if ($measureWidth) {
-            $target.WrapText = $false
-            [void]$probeColumn.AutoFit()
-            return [double]$probeColumn.Width
-        }
-        # A slightly narrower probe and extra row padding cover Excel pixel
-        # rounding without changing any source font or rich text run.
-        Set-InvoiceColumnPoints $probeColumn ([Math]::Max(1.0, $width - 1.0)) $context
-        $target.WrapText = $true
-        $probeRow.RowHeight = 15
-        [void]$probeRow.AutoFit()
-        $height = [double]$probeRow.RowHeight
-        if ($height -ge 409.0) {
-            throw ($context + ': required text height reaches the Excel 409 pt limit.')
-        }
-        return ($height + 2.0)
-    } catch {
-        throw ($context + ': native measurement failed. ' + $_.Exception.Message)
-    } finally {
-        Release-InvoiceLayoutCom $probeRow
-        Release-InvoiceLayoutCom $probeColumn
-        Release-InvoiceLayoutCom $target
-    }
-}
-
 function Fit-InvoiceContent($book, $item, $formulaSnapshot = $null) {
-    $sheet = $worksheets = $probe = $scope = $scopeRows = $scopeColumns = $null
-    $application = $worksheetFunctions = $sheetRows = $sheetColumns = $null
-    $probeBooks = $probeBook = $probeSheets = $null
-    $rowMinima = @{}
+    $sheets = $sheet = $rows = $columns = $band = $bandRows = $bandColumns = $null
+    $widthBand = $null
+    $application = $functions = $null
     $columnMinima = @{}
-    $numericColumns = @{}
-    $captionAreas = @{}
-    $formulaValues = @{}
-    $sheetName = [string]$item.name
-    foreach ($snapshot in $formulaSnapshot) {
-        if ([string]$snapshot.Sheet -eq $sheetName) { $formulaValues[[string]$snapshot.Address] = $snapshot }
-    }
+    $rowMinima = @{}
+    $name = [string]$item.name
     try {
-        if ([string]::IsNullOrWhiteSpace($sheetName)) { throw 'Layout sheet name is missing.' }
-        if ([int]$item.print_end_row -lt 1 -or [int]$item.print_end_column -lt 1) {
-            throw ($sheetName + ': invalid print bounds.')
-        }
-        $worksheets = $book.Worksheets
-        $sheet = $worksheets.Item($sheetName)
+        $first = [int]$item.header_row
+        $last = [int]$item.footer_row - 1
+        $lastColumn = [int]$item.print_end_column
+        if ($first -lt 1 -or $last -lt $first -or $lastColumn -lt 1) { throw 'Invalid detail AutoFit bounds.' }
+        $sheets = $book.Worksheets
+        $sheet = $sheets.Item($name)
         $application = $book.Application
-        $worksheetFunctions = $application.WorksheetFunction
-        $sheetRows = $sheet.Rows
-        $sheetColumns = $sheet.Columns
-        $scope = $sheet.Range([string]$item.print_area)
-        $scopeRows = $scope.EntireRow
-        $scopeColumns = $scope.EntireColumn
-        $scopeRows.Hidden = $false
-        $scopeColumns.Hidden = $false
-        foreach ($index in @($item.numeric_columns)) { $numericColumns[[int]$index] = $true }
-        for ($index = 1; $index -le [int]$item.print_end_row; $index++) {
+        $functions = $application.WorksheetFunction
+        $rows = $sheet.Rows
+        $columns = $sheet.Columns
+        # Include column headings, not the merged title or the three footer
+        # rows. Keep existing minimum widths so fixed footer labels still fit.
+        for ($index = 1; $index -le $lastColumn; $index++) {
+            $column = $null
+            try {
+                $column = $columns.Item($index)
+                $columnMinima[$index] = [double]$column.ColumnWidth
+            } finally { Release-InvoiceLayoutCom $column }
+        }
+        for ($index = $first; $index -le $last; $index++) {
             $row = $null
             try {
-                $row = $sheetRows.Item($index)
+                $row = $rows.Item($index)
                 $rowMinima[$index] = [double]$row.RowHeight
             } finally { Release-InvoiceLayoutCom $row }
         }
-        foreach ($index in $numericColumns.Keys) {
+        $edge = $null
+        try {
+            $edge = $columns.Item($lastColumn)
+            $letter = ([string]$edge.Address($false, $false)).Split(':')[0]
+            $band = $sheet.Range('A' + $first + ':' + $letter + $last)
+        } finally { Release-InvoiceLayoutCom $edge }
+        if (-not [Object]::Equals($band.MergeCells, $false)) {
+            throw 'The detail/header area contains merged cells; use the standard unmerged detail template.'
+        }
+        $band.WrapText = $false
+        $band.ShrinkToFit = $false
+        # Totals may use a wider bold/grouped numeric format. Include that
+        # row for column width only; its merged label is ignored by AutoFit.
+        $widthBand = $sheet.Range('A' + $first + ':' + $letter + [int]$item.footer_row)
+        $bandColumns = $widthBand.Columns
+        [void]$bandColumns.AutoFit()
+        for ($index = 1; $index -le $lastColumn; $index++) {
             $column = $null
             try {
-                $column = $sheetColumns.Item([int]$index)
-                $columnMinima[$index] = [double]$column.Width
+                $column = $columns.Item($index)
+                if ([double]$column.ColumnWidth -lt [double]$columnMinima[$index]) {
+                    $column.ColumnWidth = [double]$columnMinima[$index]
+                }
+                # Excel's hard column limit: use native wrapping only for a
+                # column that cannot grow further. Ordinary details stay flat.
+                if ([double]$column.ColumnWidth -ge 254.9) {
+                    $columnLetter = ([string]$column.Address($false, $false)).Split(':')[0]
+                    $wrapped = $null
+                    try {
+                        $wrapped = $sheet.Range($columnLetter + $first + ':' + $columnLetter + $last)
+                        $wrapped.WrapText = $true
+                    } finally { Release-InvoiceLayoutCom $wrapped }
+                }
             } finally { Release-InvoiceLayoutCom $column }
         }
-        # Keep the source worksheet collection unchanged. Adding a source
-        # probe would change SHEETS() while fitting its calculated display.
-        # A scratch workbook also leaves Application.Calculation untouched.
-        $probeBooks = $application.Workbooks
-        $probeBook = $probeBooks.Add(-4167)
-        $probeBook.Date1904 = [bool]$book.Date1904
-        $probeSheets = $probeBook.Worksheets
-        $probe = $probeSheets.Item(1)
-        [void]$sheet.Activate()
-
-        # Measure individual numeric cells, never entire template columns:
-        # merged titles and footer labels must not inflate numeric widths.
-        foreach ($address in @($item.content_cells)) {
-            $cell = $area = $columns = $column = $caption = $null
-            $context = $sheetName + '!' + [string]$address
-            try {
-                $cell = $sheet.Range([string]$address)
-                $area = $cell.MergeArea
-                $area.WrapText = $true
-                $area.ShrinkToFit = $false
-                if ([bool]$worksheetFunctions.IsError($cell)) { throw ($context + ': cell contains an Excel error.') }
-                $value = $cell.Value2
-                $useCapturedValue = $formulaValues.ContainsKey([string]$address)
-                if ($useCapturedValue) {
-                    $value = $formulaValues[[string]$address].Value
-                } elseif ($null -ne $formulaSnapshot -and [bool]$cell.HasFormula) {
-                    throw ($context + ': formula is missing from the calculated value snapshot.')
-                }
-                $isNumber = $null -ne $value -and $value -isnot [string] -and $value -isnot [bool]
-                if (-not $isNumber) {
-                    $span = $null
-                    if ($null -ne $item.caption_spans) { $span = $item.caption_spans.PSObject.Properties[[string]$address] }
-                    if ($null -ne $span) {
-                        $caption = $sheet.Range([string]$span.Value)
-                        $textWidth = (Measure-InvoiceCell $cell $area $probe 0.0 $true $context $useCapturedValue $value) + 2.0
-                        if ($textWidth -le [double]$caption.Width) {
-                            $cell.WrapText = $false
-                            $captionAreas[[string]$address] = [string]$span.Value
-                        }
-                    }
-                    continue
-                }
-                $columns = $area.Columns
-                $firstColumn = [int]$area.Column
-                $lastColumn = $firstColumn + [int]$columns.Count - 1
-                $expandIndex = 0
-                for ($index = $firstColumn; $index -le $lastColumn; $index++) {
-                    if ($numericColumns.ContainsKey($index)) { $expandIndex = $index }
-                }
-                if ($expandIndex -eq 0) { continue }
-                $required = (Measure-InvoiceCell $cell $area $probe 0.0 $true $context $useCapturedValue $value) + 2.0
-                $missing = $required - [double]$area.Width
-                if ($missing -gt 0.05) {
-                    $column = $sheetColumns.Item($expandIndex)
-                    Set-InvoiceColumnPoints $column ([double]$column.Width + $missing) $context
-                }
-            } finally {
-                Release-InvoiceLayoutCom $caption
-                Release-InvoiceLayoutCom $column
-                Release-InvoiceLayoutCom $columns
-                Release-InvoiceLayoutCom $area
-                Release-InvoiceLayoutCom $cell
-            }
-        }
-
-        # Native AutoFit handles unmerged cells. Restore every original row
-        # minimum, including retained blank rows and side content rows.
-        [void]$scopeRows.AutoFit()
-        for ($index = 1; $index -le [int]$item.print_end_row; $index++) {
+        $bandRows = $band.Rows
+        [void]$bandRows.AutoFit()
+        for ($index = $first; $index -le $last; $index++) {
             $row = $null
             try {
-                $row = $sheetRows.Item($index)
+                $row = $rows.Item($index)
                 $height = [double]$row.RowHeight
-                $row.RowHeight = [Math]::Max($height, [double]$rowMinima[$index])
+                if ($height -ge 408.0) { throw ('Row ' + $index + ' exceeds the safe Excel AutoFit height; shorten the detail text.') }
+                if ($height -lt [double]$rowMinima[$index]) { $row.RowHeight = [double]$rowMinima[$index] }
             } finally { Release-InvoiceLayoutCom $row }
         }
-
-        # Check every anchor, including ordinary cells, through the same native
-        # probe so long unmerged text and merged text share the height proof.
+        # Lightweight validation remains; no clipboard copies or text probes.
         foreach ($address in @($item.content_cells)) {
-            $cell = $area = $originalArea = $areaRows = $row = $null
-            $context = $sheetName + '!' + [string]$address
+            $cell = $null
             try {
                 $cell = $sheet.Range([string]$address)
-                $area = $cell.MergeArea
-                if ($captionAreas.ContainsKey([string]$address)) {
-                    $originalArea = $area
-                    $area = $sheet.Range($captionAreas[[string]$address])
-                }
-                $useCapturedValue = $formulaValues.ContainsKey([string]$address)
+                if ([bool]$functions.IsError($cell)) { throw ([string]$address + ': cell contains an Excel error.') }
                 $value = $cell.Value2
-                if ($useCapturedValue) {
-                    $value = $formulaValues[[string]$address].Value
-                } elseif ($null -ne $formulaSnapshot -and [bool]$cell.HasFormula) {
-                    throw ($context + ': formula is missing from the calculated value snapshot.')
+                if ($null -ne $value -and $value -is [ValueType] -and $value -isnot [bool] -and [string]$cell.Text -match '^#+$') {
+                    throw ([string]$address + ': formatted numeric value is hidden by hashes.')
                 }
-                $required = Measure-InvoiceCell $cell $area $probe ([double]$area.Width) $false $context $useCapturedValue $value
-                $areaRows = $area.Rows
-                $firstRow = [int]$area.Row
-                $count = [int]$areaRows.Count
-                $missing = $required - [double]$area.Height
-                # A vertical merge can share its required height across rows.
-                # Grow only as necessary; never shrink a previously fitted row.
-                for ($offset = $count - 1; $offset -ge 0 -and $missing -gt 0.05; $offset--) {
-                    $row = $sheetRows.Item($firstRow + $offset)
-                    $height = [double]$row.RowHeight
-                    $added = [Math]::Min($missing, 409.0 - $height)
-                    if ($added -gt 0) { Set-InvoiceRowMinimumPoints $row ($height + $added) }
-                    $missing = $required - [double]$area.Height
-                    Release-InvoiceLayoutCom $row
-                    $row = $null
-                }
-                if ($missing -gt 0.05) {
-                    throw ([string]::Format([Globalization.CultureInfo]::InvariantCulture,
-                        '{0}: content needs {1:0.##} pt; available height is {2:0.##} pt after reaching row-height capacity (409 pt per row).',
-                        @($context, $required, [double]$area.Height)))
-                }
-                if ([bool]$worksheetFunctions.IsError($cell)) { throw ($context + ': cell contains an Excel error.') }
-                $value = $cell.Value2
-                if ($null -ne $value -and $value -isnot [string] -and $value -isnot [bool] -and [string]$cell.Text -match '^#+$') {
-                    throw ($context + ': formatted numeric value is hidden by hashes.')
-                }
-            } finally {
-                Release-InvoiceLayoutCom $row
-                Release-InvoiceLayoutCom $areaRows
-                Release-InvoiceLayoutCom $area
-                Release-InvoiceLayoutCom $originalArea
-                Release-InvoiceLayoutCom $cell
-            }
-        }
-        foreach ($index in $numericColumns.Keys) {
-            $column = $null
-            try {
-                $column = $sheetColumns.Item([int]$index)
-                if ([double]$column.Width + 0.05 -lt [double]$columnMinima[$index]) {
-                    throw ($sheetName + ': numeric column became narrower than the template.')
-                }
-            } finally { Release-InvoiceLayoutCom $column }
+            } finally { Release-InvoiceLayoutCom $cell }
         }
     } catch {
-        throw ($sheetName + ': content fitting failed. ' + $_.Exception.Message)
+        throw ($name + ': detail AutoFit failed. ' + $_.Exception.Message)
     } finally {
-        # The scratch workbook is discarded on success and failure. There is
-        # never a probe sheet to add/delete in the source workbook.
-        try {
-            if ($null -ne $probeBook) { [void]$probeBook.Close($false) }
-        } finally {
-            try { if ($null -ne $application) { $application.CutCopyMode = $false } } catch { }
-            Release-InvoiceLayoutCom $probe
-            Release-InvoiceLayoutCom $probeSheets
-            Release-InvoiceLayoutCom $probeBook
-            Release-InvoiceLayoutCom $probeBooks
-            Release-InvoiceLayoutCom $scopeRows
-            Release-InvoiceLayoutCom $scopeColumns
-            Release-InvoiceLayoutCom $scope
-            Release-InvoiceLayoutCom $sheetRows
-            Release-InvoiceLayoutCom $sheetColumns
-            Release-InvoiceLayoutCom $worksheetFunctions
-            Release-InvoiceLayoutCom $application
-            Release-InvoiceLayoutCom $sheet
-            Release-InvoiceLayoutCom $worksheets
-        }
+        Release-InvoiceLayoutCom $bandRows
+        Release-InvoiceLayoutCom $bandColumns
+        Release-InvoiceLayoutCom $band
+        Release-InvoiceLayoutCom $widthBand
+        Release-InvoiceLayoutCom $columns
+        Release-InvoiceLayoutCom $rows
+        Release-InvoiceLayoutCom $sheet
+        Release-InvoiceLayoutCom $sheets
+        Release-InvoiceLayoutCom $functions
+        Release-InvoiceLayoutCom $application
     }
 }

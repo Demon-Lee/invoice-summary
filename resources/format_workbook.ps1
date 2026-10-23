@@ -48,6 +48,9 @@ public sealed class InvoiceFormatWatchdog : IDisposable {
 $excel = $books = $book = $guard = $excelProcess = $null
 $owned = $false
 $priorCalculateBeforeSave = $null
+$stage = 'open'
+$sheetName = ''
+$elapsed = [Diagnostics.Stopwatch]::StartNew()
 try {
     $plan = Get-Content -LiteralPath $PlanFile -Raw -Encoding UTF8 | ConvertFrom-Json
     if ([int]$plan.schema_version -ne 1 -or @($plan.sheets).Count -ne 2) {
@@ -77,16 +80,22 @@ try {
     if ([bool]$book.ReadOnly) { throw 'The staged workbook cannot be opened for editing.' }
     $priorCalculateBeforeSave = [bool]$excel.CalculateBeforeSave
     $excel.CalculateBeforeSave = $false
+    $stage = 'initial'
     foreach ($item in @($plan.sheets)) {
+        $sheetName = [string]$item.name
         Fit-InvoiceContent $book $item
         if ($guard.TimedOut) { throw 'Workbook formatting timed out.' }
     }
     # Calculate only after both sheets pass fitting. Re-fit the final formula
     # displays before saving. Every probe belongs to a scratch workbook, so
     # the source sheet count and calculation mode remain unchanged throughout.
+    $stage = 'calculate'
+    $sheetName = ''
     [void]$excel.Calculate()
     $formulaSnapshot = Get-InvoiceFormulaSnapshot $book $plan
+    $stage = 'final'
     foreach ($item in @($plan.sheets)) {
+        $sheetName = [string]$item.name
         Fit-InvoiceContent $book $item $formulaSnapshot
         if ($guard.TimedOut) { throw 'Workbook formatting timed out.' }
     }
@@ -95,10 +104,19 @@ try {
     # require the source to equal that same baseline before publication.
     Assert-InvoiceFormulaSnapshot $book $formulaSnapshot 'after final fitting'
     if ($guard.TimedOut) { throw 'Workbook formatting timed out.' }
+    $stage = 'save'
+    $sheetName = ''
     [void]$book.Save()
     Assert-InvoiceFormulaSnapshot $book $formulaSnapshot 'after saving'
     if ($guard.TimedOut) { throw 'Workbook formatting timed out while saving.' }
     @{ status = 'completed' } | ConvertTo-Json -Compress | Write-Output
+} catch {
+    if ($null -ne $guard -and $guard.TimedOut) {
+        throw ([string]::Format([Globalization.CultureInfo]::InvariantCulture,
+            'INVOICE_FORMAT_TIMEOUT stage={0} elapsed={1:0.0}s sheet={2}',
+            @($stage, $elapsed.Elapsed.TotalSeconds, $sheetName)))
+    }
+    throw
 } finally {
     try {
         if ($owned -and $null -ne $excel -and $null -ne $priorCalculateBeforeSave) {
