@@ -234,21 +234,23 @@ class App:
         set_stage_style(self, tone)
         self._update_action_styles()
 
-    def _complete_stage(self, tone, title, detail, *, notify=False, reason=None, diagnostic=None):
+    def _complete_stage(self, tone, title, detail, *, notify=False, reason=None, diagnostic=None, attention=False):
+        """Always update the page; only interrupt for problems or explicit notices."""
         self._set_stage(tone, title, detail)
         self.status.set(title)
-        if notify:
+        if notify and (tone in ("warning", "error") or attention):
+            popup_tone = tone if tone in ("warning", "error") else "warning"
             message = detail
             if diagnostic:
                 message += "\n\n" + error_summary(diagnostic)
             if reason:
                 message += "\n\n" + reason
             snapshot = None
-            if tone in ("warning", "error"):
+            if popup_tone in ("warning", "error"):
                 snapshot = title + "\n" + message + "\n\n完整处理记录：\n" + self._report_text
                 if diagnostic and str(diagnostic) not in snapshot:
                     snapshot += "\n\n原始错误：\n" + str(diagnostic)
-            show_result_dialog(self.root, title, message, diagnostics=snapshot, tone=tone)
+            show_result_dialog(self.root, title, message, diagnostics=snapshot, tone=popup_tone)
 
     def _choose_input(self, variable, choose):
         if self.busy or self._choosing_input:
@@ -544,9 +546,9 @@ class App:
             self._complete_stage("warning", f"{phase}完成，发现 {len(preview.issues)} 项异常", "暂不能执行，解决问题后请重新检查。", notify=notify, diagnostic=preview.issues[0], reason=popup_notice)
         elif preview.has_changes:
             next_step = "检测到上次处理未完成，点击“执行处理”继续。" if preview.resume_pending else "双击明细可人工校正；核对后点击“执行处理”。文件尚未改动。"
-            self._complete_stage("success", f"{phase}完成，预览通过", next_step, notify=notify, reason="\n\n".join(filter(None, (self.summary.get(), popup_notice))))
+            self._complete_stage("success", f"{phase}完成，预览通过", next_step, notify=notify, reason="\n\n".join(filter(None, (self.summary.get(), popup_notice))), attention=bool(popup_notice))
         else:
-            self._complete_stage("success", f"{phase}完成，无需处理", "没有可重填明细；可选择其他批次重新预览。", notify=notify, reason=popup_notice)
+            self._complete_stage("success", f"{phase}完成，无需处理", "没有可重填明细；可选择其他批次重新预览。", notify=notify, reason=popup_notice, attention=bool(popup_notice))
 
     def _render_table(self, payload, renamed=None, corrections=None):
         self.tree.delete(*self.tree.get_children())
@@ -745,13 +747,13 @@ class App:
             if result["cleanup"] == "完成":
                 detail = f"金额核对通过（本批合计 ¥{result['total']}），临时文件已清理。" + ("可查看工作簿，或点击“导出 PDF”。" if export_ready else "可查看工作簿；PDF 导出暂不可用。")
                 self._complete_stage("success" if export_ready else "warning", "执行处理完成" if export_ready else "执行处理完成，PDF 导出暂不可用", detail,
-                                     notify=True, diagnostic=result.get("_pdf_export_blocked"), reason=popup_notice)
+                                     notify=True, diagnostic=result.get("_pdf_export_blocked"), reason=popup_notice, attention=bool(popup_notice))
             else:
                 detail = "填表和金额核对已完成。" + ("需要 PDF 可先导出；开始下一批处理前再重新预览。" if export_ready else "PDF 导出暂不可用，可复制错误信息反馈。")
                 self._complete_stage("warning", "处理完成，临时文件清理未完成", detail, notify=True,
                                      diagnostic=result["cleanup"], reason=popup_notice)
         elif result["status"] == "no_change":
-            self._complete_stage("success", "执行阶段结束，无需处理", "未改动文件；继续处理前请重新进行只读预览。", notify=True, reason=popup_notice)
+            self._complete_stage("success", "执行阶段结束，无需处理", "未改动文件；继续处理前请重新进行只读预览。", notify=True, reason=popup_notice, attention=bool(popup_notice))
         else:
             reason = result.get("error") or "请复制错误信息反馈具体原因。"
             self._complete_stage("error", "执行处理未完成", "部分步骤可能已完成；解决问题后重新预览，可继续未完成的处理。", notify=True, diagnostic=reason, reason=popup_notice)
