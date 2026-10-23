@@ -83,7 +83,7 @@ def skipped_pdf_notice(payload, *, limit=None):
             name = name[:52] + "…"
         lines.append("· " + name + "：" + item["reason"])
     if len(visible) < len(skipped):
-        lines.append(f"另有 {len(skipped) - len(visible)} 份；完整文件名及原因可点击“查看详情”查看。")
+        lines.append(f"另有 {len(skipped) - len(visible)} 份未在本提示中列出。")
     return "\n".join(lines)
 
 
@@ -262,17 +262,5 @@ def build_interface(app, *, execution_steps, necessary_conditions):
     horizontal.attach(app.tree, table)
     app.tree.configure(yscrollcommand=vertical.set, xscrollcommand=horizontal.set)
     app.detail_columns = ProportionalTreeviewColumns(app.tree, columns, weights, minimums)
-    report_heading = ttk.Frame(process)
-    report_heading.grid(row=7, column=0, sticky="ew", pady=(7, 3))
-    app.details_button = app._button(report_heading, "查看详情", app._toggle_report, style="Link.TButton")
-    app.details_button.pack(side="left")
-    app.copy_report_button = app._button(report_heading, "复制报告", app._copy_report, style="Link.TButton")
-    app.copy_report_button.configure(state="disabled")
-    app.report_panel = report_panel = surface(process)
-    report_panel.grid(row=8, column=0, sticky="ew")
-    app.report = app._text(report_panel, height=3)
-    app.report.pack(fill="both", expand=True)
-    report_panel.grid_remove()
-    app._report_expanded = False
     app.progress_bar = ThinProgressbar(outer, background=PALETTE["background"], accent=PALETTE["blue"])
     app.progress_bar.pack(fill="x", pady=(4, 0))

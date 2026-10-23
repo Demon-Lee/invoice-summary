@@ -13,7 +13,7 @@ from . import __version__
 from .controller import Controller, resource_root, application_root
 from .updates import EngineStore, read_manifest, sha256
 from .corrections import FIELDS, LABELS, field_value, normalize
-from .ui import FONT, PALETTE, build_interface, set_stage_style, surface, text_widget, skipped_pdf_notice
+from .ui import FONT, PALETTE, build_interface, set_stage_style, surface, skipped_pdf_notice
 from .ui_actions import decorate_action_button
 from .pdf_export import export_workbook_pdfs, output_fingerprints
 from .pdf_export_ui import choose_export_directory
@@ -21,6 +21,7 @@ from .window_icon import set_window_icon
 from .signatures import SignatureStore
 from .signature_ui import open_signature_manager
 from .error_messages import error_summary
+from .result_dialog import show_result_dialog
 
 EXECUTION_STEPS = (
     "1. 选择完整批次的 PDF 文件夹和目标 .xlsx 工作簿。",
@@ -67,6 +68,7 @@ class App:
         self.last_pdf_output_dir = None
         self._last_pdf_report = None
         self._pdf_report_base = ""
+        self._report_text = ""
         self.interactive = []
         self.input_buttons = []
         self.input_entries = []
@@ -107,57 +109,16 @@ class App:
         build_interface(self, execution_steps=EXECUTION_STEPS, necessary_conditions=NECESSARY_CONDITIONS)
 
 
-    def _text(self, parent, height=15):
-        return text_widget(parent, height)
-
-    def _set_text(self, widget, value):
-        widget.configure(state="normal")
-        widget.delete("1.0", "end")
-        widget.insert("1.0", value)
-        widget.configure(state="disabled")
-        widget.yview_moveto(0)
-        if widget is getattr(self, "report", None):
-            widget.tag_configure("report_title", font=(FONT, 9, "bold"), foreground=PALETTE["heading"])
-            widget.tag_add("report_title", "1.0", "1.end")
-            self.copy_report_button.configure(state="normal" if value and not self.busy else "disabled")
-
-    def _copy_report(self):
-        value = self.report.get("1.0", "end-1c")
-        if not value:
-            self.status.set("暂无可复制的报告，请先进行只读预览。")
-            return
-        try:
-            self.root.clipboard_clear()
-            self.root.clipboard_append(value)
-        except tk.TclError as exc:
-            self._show_operation_error("报告未能复制", exc)
-            return
-        self.status.set("完整报告已复制，可粘贴保存或提供给维护者。")
-        self.copy_report_button.configure(text="已复制")
-        def restore_caption():
-            if self.copy_report_button.winfo_exists():
-                self.copy_report_button.configure(text="复制报告")
-        self.root.after(1500, restore_caption)
-
-    def _toggle_report(self):
-        if self.busy:
-            return
-        self._report_expanded = not self._report_expanded
-        if self._report_expanded:
-            self.report_panel.grid()
-            self.copy_report_button.pack(side="right")
-        else:
-            self.report_panel.grid_remove()
-            self.copy_report_button.pack_forget()
-        self.details_button.configure(text="收起详情" if self._report_expanded else "查看详情")
+    def _set_report(self, value):
+        self._report_text = value
 
     def _show_operation_error(self, title, error):
-        original = self.report.get("1.0", "end-1c")
+        original = self._report_text
         full = f"{title}\n原因：{error}"
         if original:
             full += "\n\n此前记录：\n" + original
-        self._set_text(self.report, full)
-        messagebox.showwarning(title, error_summary(error) + "\n\n完整记录可点击“查看详情”查看或复制。", parent=self.root)
+        self._set_report(full)
+        show_result_dialog(self.root, title, error_summary(error), diagnostics=full, tone="warning")
 
     def _update_preview_button(self, preview=None):
         clear_corrections = bool(preview and preview.corrections and not preview.resume_pending)
@@ -276,14 +237,17 @@ class App:
         self._set_stage(tone, title, detail)
         self.status.set(title)
         if notify:
-            show = messagebox.showerror if tone == "error" else messagebox.showwarning if tone == "warning" else messagebox.showinfo
             message = detail
             if diagnostic:
                 message += "\n\n" + error_summary(diagnostic)
-                message += "\n\n完整记录可点击“查看详情”查看或复制。"
             if reason:
                 message += "\n\n" + reason
-            show(title, message, parent=self.root)
+            snapshot = None
+            if tone in ("warning", "error"):
+                snapshot = title + "\n" + message + "\n\n完整处理记录：\n" + self._report_text
+                if diagnostic and str(diagnostic) not in snapshot:
+                    snapshot += "\n\n原始错误：\n" + str(diagnostic)
+            show_result_dialog(self.root, title, message, diagnostics=snapshot, tone=tone)
 
     def _choose_input(self, variable, choose):
         if self.busy or self._choosing_input:
@@ -365,15 +329,16 @@ class App:
         self.execute.configure(state="disabled")
         self._correction_hint_enabled = False
         key = (problem["kind"], problem["reason"], problem["version"])
-        if key != self._shown_rule_issue or notify:
-            self._complete_stage("warning", problem["title"], problem["next_step"], notify=notify, diagnostic=problem["reason"])
-        if key != self._shown_rule_issue:
+        changed = key != self._shown_rule_issue
+        if changed:
             if self._rule_saved_report is None:
-                self._rule_saved_report = self.report.get("1.0", "end-1c")
+                self._rule_saved_report = self._report_text
             kept = "\n\n原预览和已保存校正仍保留；恢复完整随包规则后重新检查。" if self.preview_result else ""
             original = "\n\n原检查报告：\n" + self._rule_saved_report if self._rule_saved_report else ""
-            self._set_text(self.report, f"{problem['title']}\n处理办法：{problem['next_step']}\n原因：{problem['reason']}" + kept + original)
+            self._set_report(f"{problem['title']}\n处理办法：{problem['next_step']}\n原因：{problem['reason']}" + kept + original)
             self._shown_rule_issue = key
+        if changed or notify:
+            self._complete_stage("warning", problem["title"], problem["next_step"], notify=notify, diagnostic=problem["reason"])
 
     def _restore_rule_preview(self):
         self._refresh_pdf_export_receipt()
@@ -383,7 +348,7 @@ class App:
             problem = self._preview_problem(self.preview_result)
             if problem:
                 if saved_report is not None:
-                    self._set_text(self.report, saved_report)
+                    self._set_report(saved_report)
                 self._show_stale_preview(problem)
             else:
                 self._render_preview(self.preview_result, phase="原预览")
@@ -393,7 +358,7 @@ class App:
             else:
                 self._invalidate()
             if saved_report is not None:
-                self._set_text(self.report, saved_report)
+                self._set_report(saved_report)
 
     def _preview_problem(self, preview):
         try:
@@ -411,11 +376,11 @@ class App:
         self._inputs_locked = False
         self.execute.configure(state="disabled")
         self._correction_hint_enabled = False
-        self._complete_stage("warning", "原预览已失效", "原校正保留供核对；请重新预览，确认后才会清除原校正。", notify=notify, diagnostic=reason)
-        original = self.report.get("1.0", "end-1c")
+        original = self._report_text
         heading = f"原预览已失效\n原因：{reason}\n下一步：原校正仅供核对，需重新预览；不能直接重试执行或保存校正。\n\n原报告：\n"
         if not original.startswith(heading):
-            self._set_text(self.report, heading + original)
+            self._set_report(heading + original)
+        self._complete_stage("warning", "原预览已失效", "原校正保留供核对；请重新预览，确认后才会清除原校正。", notify=notify, diagnostic=reason)
 
     def _periodic_rules(self):
         if not self.busy and not self._confirming_discard and not self._choosing_input:
@@ -473,7 +438,6 @@ class App:
                 self.execute.configure(state="disabled")
                 self._correction_hint_enabled = bool(self.preview_result and not self.preview_result.resume_pending
                                                       and any(record.get("rows") for record in self.preview_result.payload.get("records", [])))
-                self.copy_report_button.configure(state="normal" if self.report.get("1.0", "end-1c") else "disabled")
                 if stage == "export":
                     self.execute.configure(state=self._execute_before_export)
                     self._correction_hint_enabled = self._correction_hint_before_export
@@ -506,9 +470,9 @@ class App:
                         note += "\n" + export_issue
                     if validity_problem:
                         note += "\n原预览已失效：" + validity_problem + "；原校正仅供核对，须重新预览。"
-                    previous_report = "\n\n原检查报告：\n" + self.report.get("1.0", "end-1c") if retained or completed_export_ready else ""
+                    previous_report = "\n\n原检查报告：\n" + self._report_text if retained or completed_export_ready else ""
                     self.status.set("未完成，请查看原因")
-                    self._set_text(self.report, "本次操作未完成\n原因：" + event[1] + note + previous_report)
+                    self._set_report("本次操作未完成\n原因：" + event[1] + note + previous_report)
                     if stage:
                         title = {"preview": "只读预览未完成", "correction": "校正检查未完成", "execute": "执行处理未完成"}[stage]
                         detail = "原预览和已保存校正已保留。解决问题后可重试本次操作。" if current else "原校正保留供核对，预览已失效；解决问题后请重新预览。" if retained else "解决问题后请重新进行只读预览。"
@@ -551,7 +515,7 @@ class App:
         if skipped:
             self.summary.set(self.summary.get() + f" · 已跳过 {len(skipped)} 份非发票 PDF")
         notice = skipped_pdf_notice(preview.payload)
-        popup_notice = skipped_pdf_notice(preview.payload, limit=8)
+        popup_notice = skipped_pdf_notice(preview.payload)
         parts = ["异常：\n" + "\n".join(preview.issues), "下一步：可校正的字段请双击明细修改；结构或模板问题解决后再重新预览。"] if preview.issues else ["异常：无；只读预览通过，尚未改动文件。"]
         if notice:
             parts.append(notice)
@@ -571,7 +535,7 @@ class App:
                 parts.append("已恢复上次人工校正；请先完成该次运行，恢复期间不能修改校正。")
         if preview.clean and not preview.has_changes:
             parts.append("没有可重填明细，无需处理。")
-        self._set_text(self.report, "\n".join(parts))
+        self._set_report("\n".join(parts))
         if preview.clean and preview.has_changes:
             self.execute.configure(state="normal")
         phase = phase or ("只读预览" if notify else "校正检查")
@@ -693,7 +657,9 @@ class App:
                     return
             controller = self.controller
             dialog.destroy()
-            self._run(lambda: controller.correct(preview, record_index, row_index, values), self._render_preview, stage="correction")
+            self._run(lambda: controller.correct(preview, record_index, row_index, values),
+                      lambda checked: self._render_preview(checked, notify=not checked.clean, phase="校正检查"),
+                      stage="correction")
         actions = ttk.Frame(frame, style="Surface.TFrame")
         actions.grid(row=11, column=0, columnspan=3, sticky="w")
         for label, action in (("保存并检查", save), ("恢复识别值", lambda: save(True)), ("打开原发票", lambda: self._open(record["pdf"])), ("取消", dialog.destroy)):
@@ -743,7 +709,7 @@ class App:
         outcome = "处理完成，逐分金额验证通过。" if result["status"] == "completed" else "无需处理，未改动文件。" if result["status"] == "no_change" else "处理未完成。"
         parts = [outcome]
         notice = skipped_pdf_notice(result["payload"])
-        popup_notice = skipped_pdf_notice(result["payload"], limit=8)
+        popup_notice = skipped_pdf_notice(result["payload"])
         if notice:
             parts.append(notice)
         if result.get("error"):
@@ -769,20 +735,20 @@ class App:
             parts.append(f"PDF 合计 ¥{result['total']} · 验收合计 ¥{totals.get('acceptance_footer_total')} · 领用合计 ¥{totals.get('issue_footer_total')}")
         parts.append("临时文件清理：" + result["cleanup"])
         parts.append("需要 PDF 可先导出；开始下一批处理前再进行只读预览。" if export_ready else "继续处理前请重新进行只读预览。")
-        self._set_text(self.report, "\n".join(parts))
+        self._set_report("\n".join(parts))
         if result["status"] == "completed":
             if result["cleanup"] == "完成":
                 detail = f"金额核对通过（本批合计 ¥{result['total']}），临时文件已清理。" + ("可查看工作簿，或点击“导出 PDF”。" if export_ready else "可查看工作簿；PDF 导出暂不可用。")
                 self._complete_stage("success" if export_ready else "warning", "执行处理完成" if export_ready else "执行处理完成，PDF 导出暂不可用", detail,
                                      notify=True, diagnostic=result.get("_pdf_export_blocked"), reason=popup_notice)
             else:
-                detail = "填表和金额核对已完成。" + ("需要 PDF 可先导出；开始下一批处理前再重新预览。" if export_ready else "PDF 导出暂不可用，原因可点击“查看详情”查看。")
+                detail = "填表和金额核对已完成。" + ("需要 PDF 可先导出；开始下一批处理前再重新预览。" if export_ready else "PDF 导出暂不可用，可复制错误信息反馈。")
                 self._complete_stage("warning", "处理完成，临时文件清理未完成", detail, notify=True,
                                      diagnostic=result["cleanup"], reason=popup_notice)
         elif result["status"] == "no_change":
             self._complete_stage("success", "执行阶段结束，无需处理", "未改动文件；继续处理前请重新进行只读预览。", notify=True, reason=popup_notice)
         else:
-            reason = result.get("error") or "请点击“查看详情”核对具体原因。"
+            reason = result.get("error") or "请复制错误信息反馈具体原因。"
             self._complete_stage("error", "执行处理未完成", "部分步骤可能已完成；解决问题后重新预览，可继续未完成的处理。", notify=True, diagnostic=reason, reason=popup_notice)
 
     def _open_signatures(self):
@@ -832,7 +798,7 @@ class App:
         if self._pdf_export_receipt is not receipt or not self._can_export_pdf():
             messagebox.showwarning("处理状态已变化", export_issue or "请重新预览并执行处理，完成后再导出 PDF。", parent=self.root)
             return
-        current_report = self.report.get("1.0", "end-1c")
+        current_report = self._report_text
         if current_report != self._last_pdf_report:
             self._pdf_report_base = current_report
         self._execute_before_export = str(self.execute.cget("state"))
@@ -868,7 +834,7 @@ class App:
         if self._pdf_report_base:
             parts.append("此前检查报告：\n" + self._pdf_report_base)
         report = "\n\n".join(parts)
-        self._set_text(self.report, report)
+        self._set_report(report)
         self._last_pdf_report = report
         if completed:
             self.last_pdf_output_dir = result["output_dir"]
@@ -881,8 +847,8 @@ class App:
             title = "PDF 导出完成" if tone == "success" else "PDF 已导出，后续需重新处理" if export_issue else "PDF 已导出，临时文件待清理"
             self._complete_stage(tone, title, detail, notify=True, reason=reason, diagnostic=diagnostic)
         else:
-            reason = result.get("error") or "请点击“查看详情”核对具体原因。"
-            cleanup_notice = "另外，临时文件未能清理，具体位置和原因可点击“查看详情”查看。" if result["cleanup"] != "完成" else None
+            reason = result.get("error") or "请复制错误信息反馈具体原因。"
+            cleanup_notice = "另外，临时文件未能清理，可复制错误信息反馈。" if result["cleanup"] != "完成" else None
             detail = export_issue or ("工作簿已变化，请重新预览并执行处理后再导出。" if result.get("requires_processing") else "本次处理报告已保留，解决问题后可重试导出。")
             self._complete_stage("error", "PDF 导出未完成", detail, notify=True, diagnostic=reason, reason=cleanup_notice)
 

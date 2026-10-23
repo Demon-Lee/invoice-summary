@@ -14,9 +14,9 @@
 
 ## Tasks
 
-- [ ] Delete ui.py report rows/buttons; replace all App Tk report calls with a string buffer, remove unused text/toggle/copy helpers and button updates.
-- [ ] Add result_dialog.show_result_dialog(parent,title,message,diagnostics=None,tone=...), fixed footer, scrollable readonly message, modal grab/focus restore, local copy failure feedback.
-- [ ] Route error/warning stage and standalone errors through diagnostic snapshot dialogs. Update rule/stale records before showing; success dialogs omit diagnostic copy. Preserve raw errors and supplemental skip/output notices separately.
-- [ ] Show complete skipped-file lists in scrollable completion dialogs, remove dead detail-link wording from summaries/messages/docs, keep recovery guidance and business gating intact.
-- [ ] Independently review modal lifetimes/snapshot copying/report parity, compile/build and verify saved code/resources, protected code/rules/private files.
+- [x] Delete ui.py report rows/buttons; replace all App Tk report calls with a string buffer, remove unused text/toggle/copy helpers and button updates.
+- [x] Add result_dialog.show_result_dialog(parent,title,message,diagnostics=None,tone=...), fixed footer, scrollable readonly message, modal grab/focus restore, local copy failure feedback.
+- [x] Route error/warning stage and standalone errors through diagnostic snapshot dialogs. Update rule/stale records before showing; success dialogs omit diagnostic copy. Preserve raw errors and supplemental skip/output notices separately.
+- [x] Show complete skipped-file lists in scrollable completion dialogs, remove dead detail-link wording from summaries/messages/docs, keep recovery guidance and business gating intact.
+- [x] Independently review modal lifetimes/snapshot copying/report parity, compile/build and verify saved code/resources, protected code/rules/private files. Corrected-field validation now notifies only when issues remain; clean corrections/restored previews remain silent.
 - [ ] Once app is closed archive previous portable directory/packages, publish original release/InvoiceSummary and public ZIPs excluding signatures. Record evidence/limits and repackage source after documentation commit.
