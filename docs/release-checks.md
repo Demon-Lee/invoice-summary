@@ -533,3 +533,10 @@
 - 用户明确要求回退到列宽只能撑大的版本。六份运行代码/说明恢复到154c762：resources/excel_layout.ps1重新使用原列宽下限，policy及对应说明同步恢复；保留WPS优先、Excel后备和此前空白/单价精度误报修复。可缩小列宽的设计/计划标为已撤销，历史记录保留。
 - 直接以调整前已验证归档为程序来源，确认旧EXE SHA256为7df8d727a3febf6dea49b202b351cbe56f86e1b79aa4e5888a1fffb70ab9e44b。构造恢复暂存时排除归档中的recognition/signatures，改用回退前当前目录的13份规则和完整私人库，以免还原旧配置。保存EXE内24应用模块及main递归字节码、资源和说明与已恢复源码一致；其他24份应用源码、5份PowerShell、engine、本机skill及27份私人文件（不含锁）保持新基线。
 - 检测原程序已关闭，核对绝对移动路径/重解析点、当前EXE、规则及私人指纹，逐项核对1342份暂存文件后恢复原release/InvoiceSummary。被撤销版本保留于release/InvoiceSummary-1.1.23-before-grow-only-restore-20261023-224144；同名包和校验值另存本轮忽略目录。未结束用户进程、未处理业务文件或重新运行原生测试。本次恢复的是已验证成品，不新增构建或测试通过声明。版本仍1.1.23，仅本地回退，未上传GitHub。
+
+### 1.1.23 原号调整：PDF 页面左右居中（2026-10-23）
+
+- 用户要求导出PDF时表格左右居中。export_pdf.ps1的Get-NativeLayout读取原左右页边距平均值，临时PageSetup左右均设为此值，统一开启CenterHorizontally。原两侧页边距总量/可用宽度保持，整个有内容的打印区域（含侧边模板文字）相对纸张居中。既有水平坐标证明继续使用实际页边距和开关，未改变PDF内容校验或签名。设置仅用于不保存的导出副本。
+- 仅修改该脚本四行及软件自有说明。列宽只能撑大的excel_layout.ps1、另外4份PowerShell、其他24份应用源码（含main）、engine、本机skill、13份规则及27份私人文件（不含锁）保持本轮基线。25份Python源码语法、PowerShell语法和Windows构建通过，保存EXE内24模块及main递归字节码、资源和说明均与源码一致。
+- 原软件关闭后检查绝对路径/重解析点和各项指纹，逐项核对1342份暂存文件后更新原release/InvoiceSummary。旧目录保留于release/InvoiceSummary-1.1.23-before-pdf-center-20261023-225311，EXE SHA256为031fbfb43bec585bc4d7b365eb1fcb761f287d9d020fb3588c4e8f67c17edc39；旧同名包与校验已另存忽略目录。保持1.1.23，仅本地更新，未上传GitHub。
+- 本轮未新增或运行测试，未启动GUI、WPS/Excel、实际PDF导出或操作业务文件。已完成静态复查、语法、构建和保存文件核对；实际页面左右居中显示待用户试用，不宣称本轮运行验证通过。

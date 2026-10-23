@@ -187,6 +187,7 @@ function Get-NativeLayout($application, $worksheet, $pageSetup, $geometry) {
     $printRange = $titleRange = $null
     try {
         $nativeTitles = [string]$pageSetup.PrintTitleRows
+        $horizontalMargin = ([double]$pageSetup.LeftMargin + [double]$pageSetup.RightMargin) / 2.0
         $application.PrintCommunication = $false
         try {
             $pageSetup.PaperSize = 9
@@ -197,6 +198,9 @@ function Get-NativeLayout($application, $worksheet, $pageSetup, $geometry) {
             if ([string]::IsNullOrWhiteSpace($nativeTitles)) {
                 $pageSetup.PrintTitleRows = '$1:$' + [string]$headerRow
             }
+            $pageSetup.LeftMargin = $horizontalMargin
+            $pageSetup.RightMargin = $horizontalMargin
+            $pageSetup.CenterHorizontally = $true
             $pageSetup.CenterVertically = $false
             $pageSetup.PrintHeadings = $false
         } finally { $application.PrintCommunication = $true }

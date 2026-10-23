@@ -6,7 +6,7 @@
 
 **Constraints:** Keep1.1.23 locally; no GitHub or business-file writes. Retain grow-only column fitting. No new/run tests requested this turn; use static/syntax/build/saved-artifact inspection and state that limit accurately.
 
-- [ ] Capture source/rules/private/portable baselines.
-- [ ] Apply the native PageSetup change; update policy/generated guide, README, usage and1.1.23notes.
-- [ ] Inspect the complete diff, parse PowerShell/Python sources, build and compare all embedded modules/resources and protected data.
+- [x] Capture source/rules/private/portable baselines.
+- [x] Apply the native PageSetup change; update policy/generated guide, README, usage and1.1.23notes.
+- [x] Inspect the complete diff, parse PowerShell/Python sources, build and compare all embedded modules/resources and protected data.
 - [ ] With the software closed, archive/replace the original directory, package public binary/tracked source without signatures, verify saved hashes and record delivery.
