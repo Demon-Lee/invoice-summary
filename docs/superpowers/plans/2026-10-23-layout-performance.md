@@ -40,5 +40,11 @@ Files: docs/release-checks.md; ignored runtime/build/publication helpers.
 - [x] Validate20-detail and1-detail temporary formatting and PDF exports; render both sheets and review text/footer layout. Record timings for formatting and PDF separately. Exercise two-page repeated headers and final detail/footer grouping.
 - [x] Exercise long literal/formula/merged content via temporary fixtures; preserve values, formulas, merged ranges, fonts and number formats where applicable. Reject constant errors and numeric all-hash displays.
 - [x] Run only focused authorized checks, syntax/AST, independent static review, Windows build and saved-byte integrity checks.
-- [ ] Verify app closed; archive old portable directory/packages and replace original release/InvoiceSummary. Preserve signatures/rules, exclude signatures from ZIPs.
-- [ ] Repackage source, binary and checksums; record actual evidence and remaining scope; no GitHub upload.
+- [x] Verify app closed; archive old portable directory/packages and replace original release/InvoiceSummary. Preserve signatures/rules, exclude signatures from ZIPs.
+- [x] Repackage source, binary and checksums; record actual evidence and remaining scope; no GitHub upload.
+
+## Actual completion
+
+Implementation: d267557. Native formatting/font stage: full20 11.437s, single1 8.141s, both cached totals correct. Authorized temporary-copy PDF exports pass for both sheets, including two-page repeated headers and final detail/footer grouping. Original workbook fingerprints preserved. Forced diagnostic watchdog reports a readable timeout without an RPC cleanup error; production guard remains210s. Constant errors, all-hash numeric displays, merged details and over-capacity fixtures fail without publication. Independent static review has no remaining blocking findings.
+
+Original portable directory replaced after closure and byte checks; previous folder archived as release/InvoiceSummary-1.1.21-before-layout-performance-fix-20261023-092452. Saved executable SHA256: 356f6ef2f4ce7cb5140751b9c2dfacab944db383000e802a77b5f2a800adf0c7. Public Windows archive contains1313 files, source152; private signatures excluded. Full GUI, invoice recognition/renaming/writing and signed export were not rerun. See docs/release-checks.md for evidence and scope.
