@@ -71,6 +71,11 @@ class _SignatureManager:
         self.photo_key = None
         self.selectors = {}
         self.role_labels = {}
+        self.role_previews = {}
+        self.role_photos = {}
+        self.role_preview_keys = {}
+        self.role_preview_expected = {}
+        self.role_preview_request = None
         self.selector_ids = [None]
         self.pending_bindings = {}
         self.pending_fingerprints = {}
@@ -148,7 +153,6 @@ class _SignatureManager:
         self.roles_page, self.roles_canvas, roles_body = scrollable_page()
         self.library_page, self.canvas, body = scrollable_page()
         self.tab_pages = {"roles": self.roles_page, "library": self.library_page}
-        self._select_tab("roles")
         dialog.bind("<Control-Tab>", lambda event: self._cycle_tab(1), add="+")
         dialog.bind("<Control-Shift-Tab>", lambda event: self._cycle_tab(-1), add="+")
         library_heading = surface(body, padding=12)
@@ -243,6 +247,7 @@ class _SignatureManager:
         self.notice = ttk.Label(body, style="Notice.TLabel", justify="left", wraplength=550)
         self.notice.grid(row=4, column=0, sticky="ew", pady=(10, 0))
         style.configure("SignatureCaption.TLabel", background=PALETTE["surface"], foreground=PALETTE["muted"], font=(FONT, 9, "bold"))
+        style.configure("SignaturePreview.TLabel", background="#f8fafc", foreground=PALETTE["muted"], font=(FONT, 9))
         style.configure("Signature.TCombobox", font=(FONT, 10), padding=(10, 8), arrowsize=14,
                         foreground=PALETTE["text"], fieldbackground="#fafbfd", relief="flat", borderwidth=1,
                         background="#fafbfd", bordercolor="#d9e1eb", lightcolor="#d9e1eb",
@@ -277,6 +282,17 @@ class _SignatureManager:
                 # Widget binding runs before TCombobox's wheel-to-change class binding.
                 combo.bind(sequence, self._scroll_body)
             self.selectors[key] = combo
+            preview_box = tk.Frame(card, bg="#f8fafc", width=1, height=110,
+                                   highlightthickness=1, highlightbackground="#e7ecf3")
+            preview_box.grid(row=3, column=column, sticky="ew", padx=padding, pady=(10, 0))
+            preview_box.grid_propagate(False)
+            preview_box.rowconfigure(0, weight=1)
+            preview_box.columnconfigure(0, weight=1)
+            thumbnail = ttk.Label(preview_box, text="正在读取签名…", style="SignaturePreview.TLabel",
+                                  anchor="center", justify="center", padding=6, wraplength=200)
+            thumbnail.grid(row=0, column=0, sticky="nsew")
+            thumbnail.bind("<Configure>", lambda event, label=thumbnail: label.configure(wraplength=max(100, event.width - 16)))
+            self.role_previews[key] = thumbnail
             role_cards[sheet] = (card, column + 1)
         self.roles_notice = ttk.Label(roles_body, style="Notice.TLabel",
                                       justify="left", wraplength=550)
@@ -286,13 +302,14 @@ class _SignatureManager:
         for sequence in wheel_events:
             dialog.bind(sequence, self._scroll_body, add="+")
             self.listbox.bind(sequence, self._scroll_library)
-        footer = ttk.Frame(frame)
+        footer = self.footer = ttk.Frame(frame)
         footer.grid(row=2, column=0, sticky="ew", pady=(10, 0))
         self.status = ttk.Label(footer, text="正在读取签名库…", foreground=PALETTE["muted"])
         self.status.pack(side="left")
         self.save_button = ttk.Button(footer, text="保存", command=self.save_bindings, style="ExecuteAction.TButton", cursor="hand2")
         self.save_button.pack(side="right")
         dialog.bind("<Destroy>", self._on_destroy, add="+")
+        self._select_tab("roles")
         self.load()
         self.poll_id = dialog.after(40, self._poll)
 
@@ -307,6 +324,7 @@ class _SignatureManager:
             self.tab_buttons[name].state(("selected",) if selected else ("!selected",))
             self.tab_lines[name].configure(bg=PALETTE["blue"] if selected else PALETTE["surface"])
         self.active_tab = key
+        self._update_footer()
         if focus:
             self.tab_buttons[key].focus_set()
         return "break"
@@ -314,6 +332,85 @@ class _SignatureManager:
     def _cycle_tab(self, direction):
         keys = tuple(self.tab_pages)
         return self._select_tab(keys[(keys.index(self.active_tab) + direction) % len(keys)], focus=True)
+
+    def _update_footer(self):
+        if self.active_tab == "roles":
+            self.save_button.pack(side="right")
+            self.footer.grid()
+        else:
+            self.save_button.pack_forget()
+            if self.status.cget("text"):
+                self.footer.grid()
+            else:
+                self.footer.grid_remove()
+
+    def _set_status(self, text):
+        self.status.configure(text=text)
+        self._update_footer()
+
+    def _request_role_previews(self):
+        if self.closed:
+            return
+        items = {item["id"]: item for item in self.items}
+        cached = {self.role_preview_keys[key]: photo for key, photo in self.role_photos.items()
+                  if key in self.role_preview_keys}
+        desired, missing = {}, {}
+        for key, combo in self.selectors.items():
+            index = combo.current()
+            item_id = self.selector_ids[index] if 0 <= index < len(self.selector_ids) else None
+            item = items.get(item_id)
+            if self.needs_refresh or item is None:
+                self.role_photos.pop(key, None)
+                self.role_preview_keys.pop(key, None)
+                attention = key in self.pending_attention or (key in self.data.get("attention", {}) and key not in self.pending_bindings)
+                message = "请刷新签名库后核对" if self.needs_refresh else "请重新确认签名" if attention else "未使用签名"
+                self.role_previews[key].configure(image="", text=message)
+                continue
+            fingerprint = (item_id, item["sha256"])
+            desired[key] = fingerprint
+            if fingerprint in cached:
+                self.role_photos[key] = cached[fingerprint]
+                self.role_preview_keys[key] = fingerprint
+                self.role_previews[key].configure(image=cached[fingerprint], text="")
+            else:
+                self.role_photos.pop(key, None)
+                self.role_preview_keys.pop(key, None)
+                self.role_previews[key].configure(image="", text="正在读取预览…")
+                missing[key] = fingerprint
+        self.role_preview_expected = desired
+        if not missing:
+            self.tasks.cancel_role_previews()
+            self.role_preview_request = None
+            return
+        revision = self.store.revision(self.data)
+        if self.role_preview_request and self.role_preview_request[1:] == (missing, revision):
+            return
+        item_ids = tuple(dict.fromkeys(fingerprint[0] for fingerprint in missing.values()))
+        request = self.tasks.submit("role_previews", item_ids, revision)
+        self.role_preview_request = (request, missing, revision)
+
+    def _show_role_previews(self, request, value, error):
+        if not self.role_preview_request or request != self.role_preview_request[0]:
+            return
+        _, expected, _ = self.role_preview_request
+        self.role_preview_request = None
+        photos = {}
+        for key, fingerprint in expected.items():
+            if self.role_preview_expected.get(key) != fingerprint:
+                continue
+            image, problem = (value or {}).get(fingerprint[0], (None, True)) if error is None else (None, True)
+            try:
+                if problem or image is None:
+                    raise ValueError("Preview unavailable")
+                if fingerprint not in photos:
+                    photos[fingerprint] = ImageTk.PhotoImage(image, master=self.dialog)
+                self.role_photos[key] = photos[fingerprint]
+                self.role_preview_keys[key] = fingerprint
+                self.role_previews[key].configure(image=photos[fingerprint], text="")
+            except (OSError, ValueError, tk.TclError):
+                self.role_photos.pop(key, None)
+                self.role_preview_keys.pop(key, None)
+                self.role_previews[key].configure(image="", text="预览暂不可用，请刷新签名库")
 
     @staticmethod
     def _wheel_units(event):
@@ -390,6 +487,7 @@ class _SignatureManager:
                          self.pending_bindings.get(key, data["bindings"].get(key)))
                 combo.current(self.selector_ids.index(bound) if bound in self.selector_ids else 0)
             self.show_selected()
+            self._request_role_previews()
         finally:
             self.refreshing = False
             self.canvas.yview_moveto(body_position)
@@ -453,8 +551,10 @@ class _SignatureManager:
         self.control_kind = kind
         self.tasks.cancel_preview()
         self.preview_request = None
+        self.tasks.cancel_role_previews()
+        self.role_preview_request = None
         self._update_controls()
-        self.status.configure(text="正在保存签名库…" if kind == "mutate" else "正在处理签名库…")
+        self._set_status("正在保存签名库…" if kind == "mutate" else "正在处理签名库…")
         request = self.tasks.submit(kind, *args, **kwargs)
         self.control_request = (request, selected, action, path)
 
@@ -473,6 +573,9 @@ class _SignatureManager:
                 request, kind, value, error = self.tasks.results.get_nowait()
             except Empty:
                 break
+            if kind == "role_previews":
+                self._show_role_previews(request, value, error)
+                continue
             if kind == "preview":
                 if not self.preview_request or request != self.preview_request[0]:
                     continue
@@ -506,7 +609,7 @@ class _SignatureManager:
                     status = "签字位置已保存，请刷新列表核对。" if action == "save_bindings" else "签名已保存，请刷新列表核对。"
                 else:
                     status = "操作未完成，请刷新列表核对。"
-                self.status.configure(text=status)
+                self._set_status(status)
                 messagebox.showerror("签名库", _error_text(error), parent=self.dialog)
                 continue
             if kind == "mutate":
@@ -520,7 +623,7 @@ class _SignatureManager:
                 self.pending_fingerprints.clear()
                 self.saved_awaiting_refresh = False
             self.refresh(data, selected=selected)
-            self.status.configure(text="签字位置已保存" if saved_positions else
+            self._set_status("签字位置已保存" if saved_positions else
                                   "签字位置尚未保存" if self.pending_bindings else "")
             if action and action != "save_bindings":
                 self._confirm_change(action, selected, path)
@@ -542,11 +645,12 @@ class _SignatureManager:
                 pass
             self.poll_id = None
         self.control_request = self.preview_request = None
+        self.role_preview_request = None
         self.tasks.close()
 
     def close(self):
         if self.control_kind == "mutate":
-            self.status.configure(text="正在保存签名库，请稍候再关闭…")
+            self._set_status("正在保存签名库，请稍候再关闭…")
             return
         self.stop_tasks()
         self.dialog.destroy()
@@ -636,7 +740,8 @@ class _SignatureManager:
             self.pending_attention.discard(key)
             self._show_warnings()
             self._update_controls()
-            self.status.configure(text="签字位置尚未保存")
+            self._set_status("签字位置尚未保存")
+            self._request_role_previews()
 
     def save_bindings(self):
         if self.busy or self.closed or self.needs_refresh or self.pending_attention or not self.pending_bindings:
