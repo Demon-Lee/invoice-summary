@@ -20,6 +20,7 @@ from .pdf_export_ui import choose_export_directory
 from .window_icon import set_window_icon
 from .signatures import SignatureStore
 from .signature_ui import open_signature_manager
+from .error_messages import error_summary
 
 EXECUTION_STEPS = (
     "1. 选择完整批次的 PDF 文件夹和目标 .xlsx 工作簿。",
@@ -129,9 +130,34 @@ class App:
             self.root.clipboard_clear()
             self.root.clipboard_append(value)
         except tk.TclError as exc:
-            messagebox.showwarning("报告未能复制", str(exc), parent=self.root)
+            self._show_operation_error("报告未能复制", exc)
             return
         self.status.set("完整报告已复制，可粘贴保存或提供给维护者。")
+        self.copy_report_button.configure(text="已复制")
+        def restore_caption():
+            if self.copy_report_button.winfo_exists():
+                self.copy_report_button.configure(text="复制报告")
+        self.root.after(1500, restore_caption)
+
+    def _toggle_report(self):
+        if self.busy:
+            return
+        self._report_expanded = not self._report_expanded
+        if self._report_expanded:
+            self.report_panel.grid()
+            self.copy_report_button.pack(side="right")
+        else:
+            self.report_panel.grid_remove()
+            self.copy_report_button.pack_forget()
+        self.details_button.configure(text="收起详情" if self._report_expanded else "查看详情")
+
+    def _show_operation_error(self, title, error):
+        original = self.report.get("1.0", "end-1c")
+        full = f"{title}\n原因：{error}"
+        if original:
+            full += "\n\n此前记录：\n" + original
+        self._set_text(self.report, full)
+        messagebox.showwarning(title, error_summary(error) + "\n\n完整记录可点击“查看详情”查看或复制。", parent=self.root)
 
     def _update_preview_button(self, preview=None):
         clear_corrections = bool(preview and preview.corrections and not preview.resume_pending)
@@ -246,12 +272,17 @@ class App:
         set_stage_style(self, tone)
         self._update_action_styles()
 
-    def _complete_stage(self, tone, title, detail, *, notify=False, reason=None):
+    def _complete_stage(self, tone, title, detail, *, notify=False, reason=None, diagnostic=None):
         self._set_stage(tone, title, detail)
         self.status.set(title)
         if notify:
             show = messagebox.showerror if tone == "error" else messagebox.showwarning if tone == "warning" else messagebox.showinfo
-            message = detail + ("\n\n" + reason if reason else "")
+            message = detail
+            if diagnostic:
+                message += "\n\n" + error_summary(diagnostic)
+                message += "\n\n完整记录可点击“查看详情”查看或复制。"
+            if reason:
+                message += "\n\n" + reason
             show(title, message, parent=self.root)
 
     def _choose_input(self, variable, choose):
@@ -335,7 +366,7 @@ class App:
         self._correction_hint_enabled = False
         key = (problem["kind"], problem["reason"], problem["version"])
         if key != self._shown_rule_issue or notify:
-            self._complete_stage("warning", problem["title"], problem["next_step"], notify=notify, reason=problem["reason"])
+            self._complete_stage("warning", problem["title"], problem["next_step"], notify=notify, diagnostic=problem["reason"])
         if key != self._shown_rule_issue:
             if self._rule_saved_report is None:
                 self._rule_saved_report = self.report.get("1.0", "end-1c")
@@ -380,7 +411,7 @@ class App:
         self._inputs_locked = False
         self.execute.configure(state="disabled")
         self._correction_hint_enabled = False
-        self._complete_stage("warning", "原预览已失效", "原校正保留供核对；请重新预览，确认后才会清除原校正。", notify=notify, reason=reason)
+        self._complete_stage("warning", "原预览已失效", "原校正保留供核对；请重新预览，确认后才会清除原校正。", notify=notify, diagnostic=reason)
         original = self.report.get("1.0", "end-1c")
         heading = f"原预览已失效\n原因：{reason}\n下一步：原校正仅供核对，需重新预览；不能直接重试执行或保存校正。\n\n原报告：\n"
         if not original.startswith(heading):
@@ -480,10 +511,10 @@ class App:
                     self._set_text(self.report, "本次操作未完成\n原因：" + event[1] + note + previous_report)
                     if stage:
                         title = {"preview": "只读预览未完成", "correction": "校正检查未完成", "execute": "执行处理未完成"}[stage]
-                        detail = "原预览和已保存校正已保留。请解决下方原因后重试本次操作。" if current else "原校正保留供核对，预览已失效；请解决下方原因后重新预览。" if retained else "请查看下方原因，解决问题后重新进行只读预览。"
-                        self._complete_stage("error", title, detail, notify=True, reason=event[1])
+                        detail = "原预览和已保存校正已保留。解决问题后可重试本次操作。" if current else "原校正保留供核对，预览已失效；解决问题后请重新预览。" if retained else "解决问题后请重新进行只读预览。"
+                        self._complete_stage("error", title, detail, notify=True, diagnostic=event[1])
                     else:
-                        messagebox.showerror("操作未完成", event[1] + note, parent=self.root)
+                        self._complete_stage("error", "操作未完成", "本次操作未完成。", notify=True, diagnostic=event[1])
         except queue.Empty:
             pass
         self._update_action_styles()
@@ -545,7 +576,7 @@ class App:
             self.execute.configure(state="normal")
         phase = phase or ("只读预览" if notify else "校正检查")
         if not preview.clean:
-            self._complete_stage("warning", f"{phase}完成，发现 {len(preview.issues)} 项异常", "暂不能执行。请查看下方异常，校正字段或解决问题后重新检查。", notify=notify, reason="\n\n".join(filter(None, (preview.issues[0], popup_notice))))
+            self._complete_stage("warning", f"{phase}完成，发现 {len(preview.issues)} 项异常", "暂不能执行，解决问题后请重新检查。", notify=notify, diagnostic=preview.issues[0], reason=popup_notice)
         elif preview.has_changes:
             next_step = "检测到上次处理未完成，点击“执行处理”继续。" if preview.resume_pending else "双击明细可人工校正；核对后点击“执行处理”。文件尚未改动。"
             self._complete_stage("success", f"{phase}完成，预览通过", next_step, notify=notify, reason="\n\n".join(filter(None, (self.summary.get(), popup_notice))))
@@ -741,18 +772,18 @@ class App:
         self._set_text(self.report, "\n".join(parts))
         if result["status"] == "completed":
             if result["cleanup"] == "完成":
-                detail = f"金额核对通过（本批合计 ¥{result['total']}），临时文件已清理。" + ("可查看工作簿，或点击“导出 PDF”。" if export_ready else "可查看工作簿；PDF 导出暂不可用，原因见检查报告。")
+                detail = f"金额核对通过（本批合计 ¥{result['total']}），临时文件已清理。" + ("可查看工作簿，或点击“导出 PDF”。" if export_ready else "可查看工作簿；PDF 导出暂不可用。")
                 self._complete_stage("success" if export_ready else "warning", "执行处理完成" if export_ready else "执行处理完成，PDF 导出暂不可用", detail,
-                                     notify=True, reason="\n\n".join(filter(None, (result.get("_pdf_export_blocked"), popup_notice))))
+                                     notify=True, diagnostic=result.get("_pdf_export_blocked"), reason=popup_notice)
             else:
-                detail = "填表和金额核对已完成；请查看下方清理原因。" + ("需要 PDF 可先导出；开始下一批处理前再重新预览。" if export_ready else "PDF 导出暂不可用，原因见检查报告。")
+                detail = "填表和金额核对已完成。" + ("需要 PDF 可先导出；开始下一批处理前再重新预览。" if export_ready else "PDF 导出暂不可用，原因可点击“查看详情”查看。")
                 self._complete_stage("warning", "处理完成，临时文件清理未完成", detail, notify=True,
-                                     reason="\n\n".join(filter(None, (result["cleanup"], result.get("_pdf_export_blocked"), popup_notice))))
+                                     diagnostic=result["cleanup"], reason=popup_notice)
         elif result["status"] == "no_change":
             self._complete_stage("success", "执行阶段结束，无需处理", "未改动文件；继续处理前请重新进行只读预览。", notify=True, reason=popup_notice)
         else:
-            reason = result.get("error") or "请查看下方“检查、异常与实际结果”中的具体原因。"
-            self._complete_stage("error", "执行处理未完成", "部分步骤可能已完成；解决原因后重新预览，可继续未完成的处理。", notify=True, reason="\n\n".join(filter(None, (reason, popup_notice))))
+            reason = result.get("error") or "请点击“查看详情”核对具体原因。"
+            self._complete_stage("error", "执行处理未完成", "部分步骤可能已完成；解决问题后重新预览，可继续未完成的处理。", notify=True, diagnostic=reason, reason=popup_notice)
 
     def _open_signatures(self):
         if self.busy or self._choosing_input:
@@ -762,7 +793,7 @@ class App:
         try:
             open_signature_manager(self.root, self.signatures)
         except (OSError, ValueError) as exc:
-            messagebox.showwarning("签名管理未能打开", str(exc), parent=self.root)
+            self._show_operation_error("签名管理未能打开", exc)
         finally:
             self._choosing_input = False
             self._update_input_controls()
@@ -792,7 +823,7 @@ class App:
             directory = options["directory"]
             approved = output_fingerprints(directory)
         except (OSError, ValueError) as exc:
-            messagebox.showwarning("暂不能导出 PDF", str(exc), parent=self.root)
+            self._show_operation_error("暂不能导出 PDF", exc)
             return
         existing = [str(Path(directory) / name) for name, digest in approved.items() if digest is not None]
         if existing and not messagebox.askyesno("确认替换已有 PDF", "以下文件已存在：\n\n" + "\n".join(existing) + "\n\n两份 PDF 都生成成功后才会替换。是否继续？", default="no", parent=self.root):
@@ -846,19 +877,14 @@ class App:
             reason = "\n".join(f"{item['path']}（{item['pages']} 页）" for item in result["files"])
             if signing:
                 reason += f"\n\n已添加 {len(signing['applied'])} 处签名；原 Excel 未添加签名。"
-            if tone == "warning":
-                if result["cleanup"] != "完成":
-                    reason += "\n\n临时文件清理：" + result["cleanup"]
-                if export_issue:
-                    reason += "\n\n" + export_issue
+            diagnostic = result["cleanup"] if result["cleanup"] != "完成" else export_issue
             title = "PDF 导出完成" if tone == "success" else "PDF 已导出，后续需重新处理" if export_issue else "PDF 已导出，临时文件待清理"
-            self._complete_stage(tone, title, detail, notify=True, reason=reason)
+            self._complete_stage(tone, title, detail, notify=True, reason=reason, diagnostic=diagnostic)
         else:
-            reason = result.get("error", "请查看检查报告")
-            if result["cleanup"] != "完成":
-                reason += "\n\n" + result["cleanup"]
-            detail = export_issue or ("工作簿已变化，请重新预览并执行处理后再导出。" if result.get("requires_processing") else "本次处理报告已保留；解决下方原因后可重试导出。")
-            self._complete_stage("error", "PDF 导出未完成", detail, notify=True, reason=reason)
+            reason = result.get("error") or "请点击“查看详情”核对具体原因。"
+            cleanup_notice = "另外，临时文件未能清理，具体位置和原因可点击“查看详情”查看。" if result["cleanup"] != "完成" else None
+            detail = export_issue or ("工作簿已变化，请重新预览并执行处理后再导出。" if result.get("requires_processing") else "本次处理报告已保留，解决问题后可重试导出。")
+            self._complete_stage("error", "PDF 导出未完成", detail, notify=True, diagnostic=reason, reason=cleanup_notice)
 
 
     def _open(self, value):
@@ -867,7 +893,7 @@ class App:
                 raise ValueError("请先选择有效文件或目录")
             os.startfile(str(Path(value).resolve()))
         except Exception as exc:
-            messagebox.showinfo("无法打开", str(exc))
+            self._show_operation_error("无法打开", exc)
 
     def _close(self):
         if self._choosing_input:
