@@ -15,7 +15,9 @@
 - [x] Add resources/office_runtime.ps1: Auto/Excel/WPS activation, process/handle/workbook checks, actual backend selection, safe owned cleanup/watchdog and exact AST font activation adaptation. Update check_excel.ps1, run_excel.ps1, format_workbook.ps1 and export_pdf.ps1 to accept OfficeBackend and use this runtime. Existing native layout logic remains unchanged; watchdogs match the selected owned process identity.
 - [x] Update controller.ExcelAdapter with validated requested/detected backend, command argument propagation and ready JSON validation; update app requirements, summary/progress and error messages. Increment application/docs to1.1.23 and document WPS target version and software ownership.
 - [x] Run new unit/native AST tests and existing unit suite, reporting unrelated baseline failures separately if found. Run production adapter explicitly against WPS and Excel temporary fixtures, then automatic selection; verify source values/formulas/merges, cached totals, complete PDFs, page grouping and simulated signatures. Exercise failed/reused activation without changing existing documents.
-- [ ] Independent static review, syntax/build and saved byte/resource/rule/private checks. Replace the original portable directory only when closed with archive/rollback protections; package exact tracked source and public binary without signatures. Record evidence and provide local preview, leaving GitHub unchanged.
+- [x] Independent static review, syntax/build and saved byte/resource/rule/private checks. Replace the original portable directory only when closed with archive/rollback protections; package exact tracked source and public binary without signatures. Record evidence and provide local preview, leaving GitHub unchanged.
+
+Local delivery verified:1342saved files,24embedded application modules plusmain,13rule files; publicWindows archive1314members and source181members. Personal signature tree excluded from both archives and retained byte-for-byte in the local application. Previous1.1.22directory and packages retained. No GitHub mutations.
 
 ## Trial findings
 
