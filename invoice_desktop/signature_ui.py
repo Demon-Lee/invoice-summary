@@ -35,7 +35,7 @@ def open_signature_manager(parent, store):
         dialog.deiconify()
         dialog.wait_visibility()
         dialog.grab_set()
-        manager.listbox.focus_set()
+        manager.notebook.focus_set()
         parent.wait_window(dialog)
     finally:
         manager.stop_tasks()
@@ -92,23 +92,40 @@ class _SignatureManager:
         header = surface(frame, padding=12)
         header.grid(row=0, column=0, sticky="ew", pady=(0, 10))
         ttk.Label(header, text="签名管理", style="Section.TLabel", font=(FONT, 13, "bold")).pack(anchor="w")
-        scroll_host = tk.Frame(frame, bg=PALETTE["background"])
-        scroll_host.grid(row=1, column=0, sticky="nsew")
-        scroll_host.rowconfigure(0, weight=1)
-        scroll_host.columnconfigure(0, weight=1)
-        scroll_host.columnconfigure(1, minsize=14)
+        style = ttk.Style(dialog)
+        style.configure("Signature.TNotebook", background=PALETTE["background"], borderwidth=0,
+                        tabmargins=(0, 0, 0, 0))
+        style.configure("Signature.TNotebook.Tab", font=(FONT, 10, "bold"), padding=(18, 9),
+                        background=PALETTE["background"], foreground=PALETTE["muted"], borderwidth=0)
+        style.map("Signature.TNotebook.Tab", background=[("selected", PALETTE["surface"]), ("active", "#edf4ff")],
+                  foreground=[("selected", PALETTE["blue"]), ("active", PALETTE["blue"])],
+                  lightcolor=[("selected", PALETTE["surface"])], darkcolor=[("selected", PALETTE["surface"])])
+        self.notebook = ttk.Notebook(frame, style="Signature.TNotebook")
+        self.notebook.grid(row=1, column=0, sticky="nsew")
         scale = max(0.75, float(dialog.tk.call("tk", "scaling")) / (4 / 3))
-        canvas = self.canvas = tk.Canvas(scroll_host, highlightthickness=0, bd=0,
-                                        bg=PALETTE["background"], yscrollincrement=max(12, round(18 * scale)))
-        scroll = AutoHideScrollbar(scroll_host, command=canvas.yview, background=PALETTE["background"])
-        scroll.attach(canvas, scroll_host)
-        canvas.configure(yscrollcommand=scroll.set)
-        canvas.grid(row=0, column=0, sticky="nsew")
-        body = ttk.Frame(canvas)
-        body.columnconfigure(0, weight=1)
-        window = canvas.create_window((0, 0), window=body, anchor="nw")
-        body.bind("<Configure>", lambda event: canvas.configure(scrollregion=canvas.bbox("all")))
-        canvas.bind("<Configure>", lambda event: canvas.itemconfigure(window, width=event.width))
+        def scrollable_page():
+            host = ttk.Frame(self.notebook)
+            host.rowconfigure(0, weight=1)
+            host.columnconfigure(0, weight=1)
+            host.columnconfigure(1, minsize=14)
+            canvas = tk.Canvas(host, highlightthickness=0, bd=0, bg=PALETTE["background"],
+                               yscrollincrement=max(12, round(18 * scale)))
+            scroll = AutoHideScrollbar(host, command=canvas.yview, background=PALETTE["background"])
+            scroll.attach(canvas, host)
+            canvas.configure(yscrollcommand=scroll.set)
+            canvas.grid(row=0, column=0, sticky="nsew")
+            body = ttk.Frame(canvas)
+            body.columnconfigure(0, weight=1)
+            window = canvas.create_window((0, 0), window=body, anchor="nw")
+            body.bind("<Configure>", lambda event: canvas.configure(scrollregion=canvas.bbox("all")))
+            canvas.bind("<Configure>", lambda event: canvas.itemconfigure(window, width=event.width))
+            return host, canvas, body
+        self.roles_page, self.roles_canvas, roles_body = scrollable_page()
+        self.library_page, self.canvas, body = scrollable_page()
+        self.notebook.add(self.roles_page, text="签字位置")
+        self.notebook.add(self.library_page, text="签名库")
+        self.notebook.select(self.roles_page)
+        self.notebook.enable_traversal()
         library = surface(body, padding=12)
         library.columnconfigure(0, weight=1)
         library.grid(row=0, column=0, sticky="ew")
@@ -154,11 +171,10 @@ class _SignatureManager:
         self.preview.grid(row=0, column=0, sticky="nsew")
         self.notice = ttk.Label(library, style="Surface.TLabel", foreground="#946522", justify="left", wraplength=550)
         self.notice.grid(row=4, column=0, sticky="ew", pady=(6, 0))
-        roles = surface(body, padding=12)
-        roles.grid(row=1, column=0, sticky="ew", pady=(12, 0))
+        roles = surface(roles_body, padding=12)
+        roles.grid(row=0, column=0, sticky="ew")
         ttk.Label(roles, text="签字位置", style="Section.TLabel").grid(row=0, column=0, columnspan=2, sticky="w", pady=(0, 6))
         roles.columnconfigure(1, weight=1)
-        style = ttk.Style(dialog)
         style.configure("Signature.TCombobox", font=(FONT, 10), padding=(8, 6),
                         foreground=PALETTE["text"], fieldbackground=PALETTE["surface"],
                         background=PALETTE["surface"], bordercolor=PALETTE["line"],
@@ -178,6 +194,10 @@ class _SignatureManager:
                 combo.bind(sequence, self._scroll_body)
             self.selectors[key] = combo
         roles.columnconfigure(0, weight=1)
+        self.roles_notice = ttk.Label(roles, style="Surface.TLabel", foreground="#946522",
+                                      justify="left", wraplength=550)
+        self.roles_notice.grid(row=len(SLOTS) * 2 + 1, column=0, columnspan=2, sticky="ew", pady=(8, 0))
+        roles_body.bind("<Configure>", lambda event: self.roles_notice.configure(wraplength=max(100, event.width - 40)), add="+")
         def wrap_text(event):
             for label in (self.preview, self.notice):
                 label.configure(wraplength=max(100, event.width - 40))
@@ -206,7 +226,8 @@ class _SignatureManager:
     def _scroll_body(self, event):
         units = self._wheel_units(event)
         if units:
-            self.canvas.yview_scroll(units * 3, "units")
+            canvas = self.roles_canvas if self.notebook.select() == str(self.roles_page) else self.canvas
+            canvas.yview_scroll(units * 3, "units")
         return "break"
 
     def _scroll_library(self, event):
@@ -283,11 +304,12 @@ class _SignatureManager:
         shown = warnings[:5]
         if len(warnings) > len(shown):
             shown.append(f"另有 {len(warnings) - len(shown)} 项，请处理后刷新列表。")
-        self.notice.configure(text="\n".join(shown))
-        if warnings:
-            self.notice.grid()
-        else:
-            self.notice.grid_remove()
+        for notice in (self.notice, self.roles_notice):
+            notice.configure(text="\n".join(shown))
+            if warnings:
+                notice.grid()
+            else:
+                notice.grid_remove()
         for key, sheet, role in SLOTS:
             pending = key in attention
             self.role_labels[key].configure(text=f"{sheet} · {role}" + ("  ·  需确认" if pending else ""),

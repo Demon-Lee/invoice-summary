@@ -1,5 +1,5 @@
 """Rounded action surfaces and local icons for native ttk buttons."""
-from tkinter import ttk
+from tkinter import Frame, ttk
 
 from PIL import Image, ImageDraw, ImageTk
 
@@ -23,11 +23,12 @@ for _role in INPUT_ROLES:
 DISABLED_INK = "#8a97aa"
 
 
-def _surface_image(colors, state, focused, scale, background):
+def _surface_image(colors, state, focused, scale, background, *, transparent=False):
     """Draw once at 4x; ttk stretches only the straight middle sections."""
     size = round(40 * scale)
     factor = 4
-    image = Image.new("RGB", (size * factor, size * factor), background)
+    image = Image.new("RGBA" if transparent else "RGB", (size * factor, size * factor),
+                      (0, 0, 0, 0) if transparent else background)
     draw = ImageDraw.Draw(image)
     unit = scale * factor
     box = lambda values: tuple(round(value * unit) for value in values)
@@ -97,7 +98,8 @@ def configure_action_styles(root, style, *, font, background):
                                ("disabled", False), ("normal", True), ("hover", True),
                                ("pressed", True)):
             images[state, focused] = ImageTk.PhotoImage(
-                _surface_image(colors, state, focused, scale, "#ffffff" if role in LOCATION_ROLES + INPUT_ROLES else background), master=root)
+                _surface_image(colors, state, focused, scale, "#ffffff" if role in LOCATION_ROLES + INPUT_ROLES else background,
+                               transparent=role in LOCATION_ROLES), master=root)
         root._action_images[role] = images
         edge = round(12 * scale)
         style.element_create(element, "image", images["normal", False],
@@ -122,6 +124,12 @@ def configure_action_styles(root, style, *, font, background):
                         padding=(round((12 if compact else 16) * scale), round((6 if compact else 9) * scale)),
                         shiftrelief=0)
         style.map(name, foreground=[("disabled", DISABLED_INK)])
+        if role in LOCATION_ROLES:
+            # Transparent corners must match this button's parent in every state.
+            for prefix, parent_background in (("", background), ("Surface.", "#ffffff")):
+                context_name = prefix + name
+                style.configure(context_name, background=parent_background)
+                style.map(context_name, background=[("disabled", parent_background), ("!disabled", parent_background)])
         root._action_icons[role] = tuple(ImageTk.PhotoImage(_icon_image(role, color, scale), master=root)
                                          for color in (colors["ink"], DISABLED_INK))
     root._correction_icons = tuple(ImageTk.PhotoImage(_icon_image("EditHint", color, scale), master=root)
@@ -130,5 +138,9 @@ def configure_action_styles(root, style, *, font, background):
 
 def decorate_action_button(widget: ttk.Button, role: str):
     normal, disabled = widget.winfo_toplevel()._action_icons[role]
-    widget.configure(style=f"{role}Action.TButton", image=(normal, "disabled", disabled),
+    name = f"{role}Action.TButton"
+    if (role in LOCATION_ROLES and isinstance(widget.master, Frame)
+            and widget.master.cget("background") == "#ffffff"):
+        name = "Surface." + name
+    widget.configure(style=name, image=(normal, "disabled", disabled),
                      compound="left", cursor="hand2")

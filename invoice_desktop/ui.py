@@ -154,54 +154,59 @@ def build_interface(app, *, execution_steps, necessary_conditions):
         app.input_entries.append(entry)
     actions = ttk.Frame(process)
     actions.grid(row=2, column=0, sticky="ew", pady=(0, 7))
-    action_buttons = ttk.Frame(actions)
-    action_buttons.pack(fill="x")
-    app.preview_button = app._button(action_buttons, "只读预览", app._preview)
+    app.preview_button = app._button(actions, "只读预览", app._preview)
     decorate_action_button(app.preview_button, "Preview")
-    app.preview_button.pack(side="left", padx=(0, 14))
-    app.execute = app._button(action_buttons, "执行处理", app._apply)
+    app.execute = app._button(actions, "执行处理", app._apply)
     decorate_action_button(app.execute, "Execute")
-    app.execute.pack(side="left", padx=(0, 14))
     app.execute.configure(state="disabled")
-    app.pdf_export_button = app._button(action_buttons, "导出 PDF", app._export_pdf)
+    app.pdf_export_button = app._button(actions, "导出 PDF", app._export_pdf)
     decorate_action_button(app.pdf_export_button, "Export")
-    app.pdf_export_button.pack(side="left")
     app.pdf_export_button.configure(state="disabled")
-    app.signature_button = app._button(action_buttons, "签名管理", app._open_signatures)
+    app.signature_button = app._button(actions, "签名管理", app._open_signatures)
     decorate_action_button(app.signature_button, "Signatures")
-    app.signature_button.pack(side="left", padx=(14, 0))
-    locations = surface(actions, padding=5)
-    locations.pack(fill="x", pady=(6, 0))
-    location_buttons = []
+    action_buttons = [app.preview_button, app.execute, app.pdf_export_button, app.signature_button]
     for attribute, label, action, role in (
         ("open_invoice_folder_button", "打开发票目录", lambda: app._open(app.pdf.get()), "OpenInvoices"),
         ("open_workbook_button", "打开工作簿", lambda: app._open(app.book.get()), "OpenWorkbook"),
         ("open_pdf_folder_button", "打开导出目录", lambda: app._open(app.last_pdf_output_dir), "OpenExport"),
     ):
-        button = app._button(locations, label, action)
+        button = app._button(actions, label, action)
         decorate_action_button(button, role)
         button.configure(state="disabled")
-        location_buttons.append(button)
+        action_buttons.append(button)
         setattr(app, attribute, button)
-    location_layout = None
-    def layout_locations(event=None):
-        nonlocal location_layout
-        available = max(1, locations.winfo_width() - 12)
-        widths = tuple(button.winfo_reqwidth() for button in location_buttons)
-        single_row = sum(width + 8 for width in widths) <= available
-        columns = 3 if single_row else max(1, min(3, (available + 8) // (max(widths) + 8)))
-        layout = (single_row, columns, widths)
-        if layout == location_layout:
+    action_scale = max(0.75, float(root.tk.call("tk", "scaling")) / (4 / 3))
+    action_gap, group_gap = round(8 * action_scale), round(22 * action_scale)
+    action_layout = None
+    def layout_actions(event=None):
+        nonlocal action_layout
+        available = max(1, actions.winfo_width())
+        sizes = tuple((button.winfo_reqwidth(), button.winfo_reqheight()) for button in action_buttons)
+        layout = (available, sizes)
+        if layout == action_layout:
             return
-        location_layout = layout
-        for column in range(3):
-            locations.columnconfigure(column, uniform="location-buttons" if not single_row and column < columns else "", weight=0)
-        for index, button in enumerate(location_buttons):
-            button.grid(row=index // columns,
-                        column=index % columns,
-                        sticky="ew", padx=(0, 8), pady=(0, 0 if single_row else 4))
-    locations.bind("<Configure>", layout_locations)
-    layout_locations()
+        action_layout = layout
+        rows, row, x = [], [], 0
+        for index, (button, (width, height)) in enumerate(zip(action_buttons, sizes)):
+            gap = (group_gap if index == 4 else action_gap) if row else 0
+            if row and x + gap + width > available:
+                rows.append(row)
+                row, x, gap = [], 0, 0
+            row.append((button, x + gap, height))
+            x += gap + width
+        if row:
+            rows.append(row)
+        y = 0
+        for row in rows:
+            height = max(item[2] for item in row)
+            for button, x, button_height in row:
+                button.place(x=x, y=y + (height - button_height) // 2)
+            y += height + action_gap
+        actions.configure(height=max(1, y - action_gap))
+    actions.bind("<Configure>", layout_actions)
+    for button in action_buttons:
+        button.bind("<Configure>", layout_actions, add="+")
+    actions.after_idle(layout_actions)
     app.stage_card = surface(process, padding=12)
     app.stage_card.grid(row=3, column=0, sticky="ew", pady=(0, 7))
     app.stage_card.columnconfigure(0, weight=1)
