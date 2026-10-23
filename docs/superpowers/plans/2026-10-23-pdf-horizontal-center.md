@@ -9,4 +9,6 @@
 - [x] Capture source/rules/private/portable baselines.
 - [x] Apply the native PageSetup change; update policy/generated guide, README, usage and1.1.23notes.
 - [x] Inspect the complete diff, parse PowerShell/Python sources, build and compare all embedded modules/resources and protected data.
-- [ ] With the software closed, archive/replace the original directory, package public binary/tracked source without signatures, verify saved hashes and record delivery.
+- [x] With the software closed, archive/replace the original directory, package public binary/tracked source without signatures, verify saved hashes and record delivery.
+
+Saved artifact verification passed:1342application files,24embedded modules plusmain,13rule files; public Windows archive1314members, tracked source186members, whole personal signature tree excluded. Native PDF export was not run this turn.

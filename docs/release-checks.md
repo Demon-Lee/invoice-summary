@@ -540,3 +540,4 @@
 - 仅修改该脚本四行及软件自有说明。列宽只能撑大的excel_layout.ps1、另外4份PowerShell、其他24份应用源码（含main）、engine、本机skill、13份规则及27份私人文件（不含锁）保持本轮基线。25份Python源码语法、PowerShell语法和Windows构建通过，保存EXE内24模块及main递归字节码、资源和说明均与源码一致。
 - 原软件关闭后检查绝对路径/重解析点和各项指纹，逐项核对1342份暂存文件后更新原release/InvoiceSummary。旧目录保留于release/InvoiceSummary-1.1.23-before-pdf-center-20261023-225311，EXE SHA256为031fbfb43bec585bc4d7b365eb1fcb761f287d9d020fb3588c4e8f67c17edc39；旧同名包与校验已另存忽略目录。保持1.1.23，仅本地更新，未上传GitHub。
 - 本轮未新增或运行测试，未启动GUI、WPS/Excel、实际PDF导出或操作业务文件。已完成静态复查、语法、构建和保存文件核对；实际页面左右居中显示待用户试用，不宣称本轮运行验证通过。
+- 公开Windows包40991559字节、1314项，源码186项，逐成员内容及SHA256核对通过；整个私人签名目录和业务文件不进包。最终校验值见release/SHA256.json，原签名与规则指纹保持。
