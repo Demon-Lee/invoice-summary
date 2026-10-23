@@ -151,51 +151,97 @@ class _SignatureManager:
         self._select_tab("roles")
         dialog.bind("<Control-Tab>", lambda event: self._cycle_tab(1), add="+")
         dialog.bind("<Control-Shift-Tab>", lambda event: self._cycle_tab(-1), add="+")
-        library = surface(body, padding=12)
-        library.columnconfigure(0, weight=1)
-        library.grid(row=0, column=0, sticky="ew")
-        library_heading = ttk.Frame(library, style="Surface.TFrame")
-        library_heading.grid(row=0, column=0, sticky="ew", pady=(0, 8))
+        library_heading = surface(body, padding=12)
+        library_heading.grid(row=0, column=0, sticky="ew")
         ttk.Label(library_heading, text="签名库", style="Section.TLabel").pack(side="left")
         ttk.Label(library_heading, text="签名格式仅限PNG/JPG/JPEG", style="Muted.TLabel").pack(side="left", padx=(12, 0))
-        toolbar = ttk.Frame(library, style="Surface.TFrame")
-        toolbar.grid(row=1, column=0, sticky="ew", pady=(0, 4))
+        toolbar = ttk.Frame(body)
+        toolbar.grid(row=1, column=0, sticky="ew", pady=(10, 12))
         # Use the root's existing rounded surfaces; do not rebuild shared theme images.
         import_button = ttk.Button(toolbar, text="导入签名…", command=self.import_image, style="ExecuteAction.TButton", cursor="hand2")
         folder_button = ttk.Button(toolbar, text="打开签名文件夹", command=self.open_folder, style="ExportAction.TButton", cursor="hand2")
         refresh_button = self.refresh_button = ttk.Button(toolbar, text="刷新列表", command=self.load, style="ExportAction.TButton", cursor="hand2")
-        self.rename_button = ttk.Button(toolbar, text="重命名…", command=self.rename, style="ExportAction.TButton")
-        self.replace_button = ttk.Button(toolbar, text="替换图片…", command=self.replace, style="ExportAction.TButton")
-        self.delete_button = ttk.Button(toolbar, text="删除…", command=self.delete, style="ExportAction.TButton")
+        selected_tools = ttk.Frame(body)
+        selected_tools.grid(row=3, column=0, sticky="ew", pady=(12, 0))
+        style.configure("Danger.ExportAction.TButton", foreground="#b4473f")
+        style.map("Danger.ExportAction.TButton", foreground=[("disabled", "#8a97aa"), ("!disabled", "#b4473f")])
+        self.rename_button = ttk.Button(selected_tools, text="重命名…", command=self.rename, style="ExportAction.TButton")
+        self.replace_button = ttk.Button(selected_tools, text="替换图片…", command=self.replace, style="ExportAction.TButton")
+        self.delete_button = ttk.Button(selected_tools, text="删除…", command=self.delete, style="Danger.ExportAction.TButton")
         self.toolbar_buttons = (import_button, folder_button, refresh_button, self.rename_button, self.replace_button, self.delete_button)
-        for index, button in enumerate(self.toolbar_buttons):
-            button.grid(row=index // 2, column=index % 2, sticky="ew", padx=(0, 6), pady=(0, 6))
-        toolbar.columnconfigure(0, weight=1)
-        toolbar.columnconfigure(1, weight=1)
-        list_panel = surface(library)
-        list_panel.grid(row=2, column=0, sticky="ew")
-        list_panel.rowconfigure(0, weight=1)
+        tool_layouts = {}
+        def layout_tools(host, buttons):
+            available = max(1, host.winfo_width())
+            widths = tuple(button.winfo_reqwidth() for button in buttons)
+            gap = max(6, round(8 * scale))
+            columns = max(1, min(len(buttons), available // (max(widths) + gap)))
+            signature = (columns, widths)
+            if tool_layouts.get(host) == signature:
+                return
+            tool_layouts[host] = signature
+            for column in range(len(buttons)):
+                host.columnconfigure(column, weight=0, uniform="signature-tools" if column < columns else "")
+            last_row = (len(buttons) - 1) // columns
+            for index, button in enumerate(buttons):
+                button.grid(row=index // columns, column=index % columns, sticky="ew",
+                            padx=(0, gap if index % columns < columns - 1 else 0),
+                            pady=(0, 6 if index // columns < last_row else 0))
+        for host, buttons in ((toolbar, self.toolbar_buttons[:3]), (selected_tools, self.toolbar_buttons[3:])):
+            host.bind("<Configure>", lambda event, host=host, buttons=buttons: layout_tools(host, buttons))
+            for button in buttons:
+                button.bind("<Configure>", lambda event, host=host, buttons=buttons: layout_tools(host, buttons), add="+")
+            layout_tools(host, buttons)
+        panels = ttk.Frame(body)
+        panels.grid(row=2, column=0, sticky="ew")
+        panels.columnconfigure(0, weight=2, uniform="signature-library-panes")
+        panels.columnconfigure(1, weight=3, uniform="signature-library-panes")
+        list_panel = surface(panels, padding=12)
+        list_panel.rowconfigure(1, weight=1)
         list_panel.columnconfigure(0, weight=1)
-        list_panel.columnconfigure(1, minsize=14)
-        self.listbox = tk.Listbox(list_panel, height=7, width=1, exportselection=False, bd=0,
+        ttk.Label(list_panel, text="签名列表", style="Section.TLabel").grid(row=0, column=0, sticky="w", pady=(0, 10))
+        list_view = tk.Frame(list_panel, bg=PALETTE["surface"])
+        list_view.grid(row=1, column=0, sticky="nsew")
+        list_view.rowconfigure(0, weight=1)
+        list_view.columnconfigure(0, weight=1)
+        list_view.columnconfigure(1, minsize=14)
+        self.listbox = tk.Listbox(list_view, height=11, width=1, exportselection=False, bd=0,
                                  highlightthickness=0, relief="flat", activestyle="none", font=(FONT, 10),
                                  bg=PALETTE["surface"], fg=PALETTE["text"], selectborderwidth=0,
                                  selectbackground=PALETTE["selected"], selectforeground=PALETTE["heading"])
         self.listbox.grid(row=0, column=0, sticky="nsew")
-        list_scroll = AutoHideScrollbar(list_panel, command=self.listbox.yview)
-        list_scroll.attach(self.listbox, list_panel)
+        list_scroll = AutoHideScrollbar(list_view, command=self.listbox.yview)
+        list_scroll.attach(self.listbox, list_view)
         self.listbox.configure(yscrollcommand=list_scroll.set)
         self.listbox.bind("<<ListboxSelect>>", self.show_selected)
-        preview_host = ttk.Frame(library, style="Surface.TFrame", height=200)
-        preview_host.grid(row=3, column=0, sticky="ew", pady=(8, 0))
+        preview_panel = surface(panels, padding=12)
+        preview_panel.rowconfigure(1, weight=1)
+        preview_panel.columnconfigure(0, weight=1)
+        ttk.Label(preview_panel, text="签名预览", style="Section.TLabel").grid(row=0, column=0, sticky="w", pady=(0, 10))
+        preview_host = ttk.Frame(preview_panel, style="Surface.TFrame", width=1, height=240)
+        preview_host.grid(row=1, column=0, sticky="nsew")
         preview_host.grid_propagate(False)
         preview_host.rowconfigure(0, weight=1)
         preview_host.columnconfigure(0, weight=1)
         self.preview = ttk.Label(preview_host, text="正在读取签名库…", anchor="center",
                                  style="Surface.TLabel", padding=10, wraplength=230)
         self.preview.grid(row=0, column=0, sticky="nsew")
-        self.notice = ttk.Label(library, style="Surface.TLabel", foreground="#946522", justify="left", wraplength=550)
-        self.notice.grid(row=4, column=0, sticky="ew", pady=(6, 0))
+        self.preview.bind("<Configure>", lambda event: self.preview.configure(wraplength=max(100, event.width - 24)))
+        library_layout = None
+        def layout_library(event=None):
+            nonlocal library_layout
+            wide = panels.winfo_width() >= 640
+            if wide == library_layout:
+                return
+            library_layout = wide
+            list_panel.grid(row=0, column=0, columnspan=1 if wide else 2, sticky="nsew",
+                            padx=(0, 12 if wide else 0), pady=(0, 0 if wide else 12))
+            preview_panel.grid(row=0 if wide else 1, column=1 if wide else 0,
+                               columnspan=1 if wide else 2, sticky="nsew")
+            self.listbox.configure(height=11 if wide else 6)
+        panels.bind("<Configure>", layout_library)
+        layout_library()
+        self.notice = ttk.Label(body, style="Notice.TLabel", justify="left", wraplength=550)
+        self.notice.grid(row=4, column=0, sticky="ew", pady=(10, 0))
         style.configure("SignatureCaption.TLabel", background=PALETTE["surface"], foreground=PALETTE["muted"], font=(FONT, 9, "bold"))
         style.configure("Signature.TCombobox", font=(FONT, 10), padding=(10, 8), arrowsize=14,
                         foreground=PALETTE["text"], fieldbackground="#fafbfd", relief="flat", borderwidth=1,
@@ -236,10 +282,7 @@ class _SignatureManager:
                                       justify="left", wraplength=550)
         self.roles_notice.grid(row=len(role_cards), column=0, sticky="ew")
         roles_body.bind("<Configure>", lambda event: self.roles_notice.configure(wraplength=max(100, event.width - 40)), add="+")
-        def wrap_text(event):
-            for label in (self.preview, self.notice):
-                label.configure(wraplength=max(100, event.width - 40))
-        body.bind("<Configure>", wrap_text, add="+")
+        body.bind("<Configure>", lambda event: self.notice.configure(wraplength=max(100, event.width - 40)), add="+")
         for sequence in wheel_events:
             dialog.bind(sequence, self._scroll_body, add="+")
             self.listbox.bind(sequence, self._scroll_library)
