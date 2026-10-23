@@ -11,7 +11,7 @@ from .signatures import SLOTS
 from .signature_tasks import SignatureRefreshError, SignatureTasks
 from .ui import FONT, PALETTE, surface
 from .ui_widgets import AutoHideScrollbar
-from .dialogs import center_dialog, filedialog, messagebox, simpledialog
+from .dialogs import center_dialog, dialog_work_area_size, filedialog, messagebox, simpledialog
 
 
 def open_signature_manager(parent, store):
@@ -24,10 +24,18 @@ def open_signature_manager(parent, store):
     dialog.configure(bg=PALETTE["background"])
     dialog.transient(parent.winfo_toplevel())
     manager = _SignatureManager(dialog, store)
-    width = min(820, max(400, dialog.winfo_screenwidth() - 80))
-    height = min(700, max(360, dialog.winfo_screenheight() - 100))
+    available_width, available_height = dialog_work_area_size(parent)
+    width = min(820, max(1, available_width - 80))
+    height_limit = max(1, available_height - 80)
+    height = min(700, height_limit)
     dialog.geometry(f"{width}x{height}")
-    dialog.minsize(min(600, width), min(440, height))
+    dialog.minsize(min(600, width), min(440, height_limit))
+    dialog.update_idletasks()
+    # Canvas keeps its own requested height, independent of the embedded page.
+    chrome_height = max(0, dialog.winfo_reqheight() - manager.roles_canvas.winfo_reqheight())
+    content_height = manager.roles_body.winfo_reqheight() + chrome_height + 8
+    height = min(height_limit, max(min(440, height_limit), content_height))
+    dialog.geometry(f"{width}x{height}")
     dialog.protocol("WM_DELETE_WINDOW", manager.close)
     dialog.bind("<Escape>", lambda event: manager.close())
     try:
@@ -160,6 +168,7 @@ class _SignatureManager:
             canvas.bind("<Configure>", sync_page)
             return host, canvas, body
         self.roles_page, self.roles_canvas, roles_body = scrollable_page()
+        self.roles_body = roles_body
         self.library_page, self.canvas, body = scrollable_page()
         self.tab_pages = {"roles": self.roles_page, "library": self.library_page}
         dialog.bind("<Control-Tab>", lambda event: self._cycle_tab(1), add="+")

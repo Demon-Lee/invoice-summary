@@ -135,6 +135,25 @@ filedialog = SimpleNamespace(**{name: _centered(getattr(_files, name)) for name 
 simpledialog = SimpleNamespace(askstring=_centered(_inputs.askstring))
 
 
+def dialog_work_area_size(parent):
+    """Read the main window's monitor workspace without moving any window."""
+    root = parent._root()
+    if os.name == "nt":
+        try:
+            placement = _WindowsPlacement(root)
+            monitor = placement.api.MonitorFromWindow(placement.main, 2)
+            info = _MonitorInfo()
+            info.size = ctypes.sizeof(info)
+            if placement.api.GetMonitorInfoW(monitor, ctypes.byref(info)):
+                width = info.work.right - info.work.left
+                height = info.work.bottom - info.work.top
+                if width > 0 and height > 0:
+                    return width, height
+        except Exception:
+            pass
+    return root.winfo_screenwidth(), root.winfo_screenheight()
+
+
 def center_dialog(dialog, parent):
     """Place once before showing, then refine the outer-frame center on first Map."""
     root = parent._root()
