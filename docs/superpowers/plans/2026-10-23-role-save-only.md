@@ -12,3 +12,11 @@
 - [x] In SignatureTasks retain the existing library preview API/channel; add separately coalesced role_previews jobs, cancellation/current-request checks and per-image errors. Deduplicate up to four IDs per batch, use store.image_bytes with expected revision/size, and keep all Tk calls out of the worker. Read/mutate/store behavior remains unchanged.
 - [x] Statically review initial selection/async callbacks/tab changes/status/focus/save/close, compile24modules/main, build and compare saved code/resources/protected/private bytes. No tests, GUI automation, Excel or business execution.
 - [x] Commit source, replace original app only after it is closed, archive previous directory and same-version packages, repackage and verify. Keep GitHub publication on hold and provide local preview.
+
+## Follow-up: Save beside position content
+
+The user requests moving Save up beside the settings. Keep it right-aligned immediately after the role cards and optional warnings inside roles_body; preserve all draft/save operations. The library keeps its separate status-only footer. Version1.1.22 and the GitHub approval gate stay unchanged.
+
+- [ ] Capture the current closed release/private/rule and all other module baselines in ignored .superpowers/role-save-near-content.
+- [ ] In signature_ui.py create a role action row at grid row len(role_cards)+1 with a left status label and the existing Save callback/button at the right. Keep the library footer status-only. _set_status updates both labels; _update_footer shows the outer footer only on the library page with nonempty status. Preserve tab/scroll/save conditions and pending data.
+- [ ] Statically review geometry parents, initial selection/status setup and save/close/callback paths; compile modules/main, build, compare embedded code/protected/private files, then replace the closed local release with guarded archive/rollback and repackage. No tests/GUI automation/Excel execution. Provide local preview and keep GitHub on hold.
