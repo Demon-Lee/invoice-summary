@@ -6,6 +6,8 @@
 
 **Architecture:** Retain all library controls and callbacks; split the existing library body into heading, responsive top tools, list/preview cards, responsive selected-item tools and notice. Existing Canvas and Listbox objects keep their state/task semantics.
 
+**Publication gate:** After local1.1.22 was built and updated, the user explicitly requested to view the result before approving upload. Launch the local app for that preview; do not push Git refs/tags, upload assets or publish a GitHub release until the user explicitly approves. GitHub has only been read/fetched so far.
+
 ## Tasks
 
 - [x] Record the scope extension in .superpowers/release-v1.1.22/baseline.json, retaining the former protected signature_ui hash as evidence and all other original protected/private/rule hashes.
