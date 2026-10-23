@@ -147,8 +147,17 @@ class _SignatureManager:
             body = ttk.Frame(canvas)
             body.columnconfigure(0, weight=1)
             window = canvas.create_window((0, 0), window=body, anchor="nw")
-            body.bind("<Configure>", lambda event: canvas.configure(scrollregion=canvas.bbox("all")))
-            canvas.bind("<Configure>", lambda event: canvas.itemconfigure(window, width=event.width))
+            def sync_page(event=None):
+                width, height = canvas.winfo_width(), canvas.winfo_height()
+                canvas.itemconfigure(window, width=width)
+                bounds = canvas.bbox(window)
+                content_height = bounds[3] - bounds[1] if bounds else 0
+                # A short scrollregion lets Canvas shift fitting content into blank space.
+                canvas.configure(scrollregion=(0, 0, width, max(height, content_height)))
+                if content_height <= height:
+                    canvas.yview_moveto(0)
+            body.bind("<Configure>", sync_page)
+            canvas.bind("<Configure>", sync_page)
             return host, canvas, body
         self.roles_page, self.roles_canvas, roles_body = scrollable_page()
         self.library_page, self.canvas, body = scrollable_page()
@@ -424,7 +433,9 @@ class _SignatureManager:
         units = self._wheel_units(event)
         if units:
             canvas = self.roles_canvas if self.active_tab == "roles" else self.canvas
-            canvas.yview_scroll(units * 3, "units")
+            first, last = canvas.yview()
+            if (units < 0 and first > 0) or (units > 0 and last < 1):
+                canvas.yview_scroll(units * 3, "units")
         return "break"
 
     def _scroll_library(self, event):
