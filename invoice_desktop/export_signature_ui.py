@@ -12,6 +12,7 @@ from .signature_ui import open_signature_manager
 from .signatures import SLOTS
 from .ui import FONT, PALETTE, surface
 from .ui_selectors import style_combobox_popup
+from .ui_switches import configure_signature_toggle
 
 
 class ExportSignaturePicker:
@@ -45,7 +46,9 @@ class ExportSignaturePicker:
         header = ttk.Frame(self.frame)
         header.pack(fill="x", pady=(0, 10))
         self.checkbox = ttk.Checkbutton(header, text="添加签名", variable=self.include,
-                                        command=self._toggle, state="disabled")
+                                        command=self._toggle, state="disabled", takefocus=True,
+                                        cursor="hand2", style=configure_signature_toggle(
+                                            header, font=FONT, palette=PALETTE))
         self.checkbox.pack(side="left")
         self.manage_button = ttk.Button(header, text="签名管理", command=self._manage,
                                         style="ExportAction.TButton", cursor="hand2")
