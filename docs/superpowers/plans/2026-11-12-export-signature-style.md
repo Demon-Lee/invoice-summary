@@ -8,13 +8,13 @@
 
 ## Task 1: 局部弹出列表样式
 
-- [ ] 新建invoice_desktop/ui_selectors.py，提供style_combobox_popup(combo, font, palette)，仅配置该控件的Tk原生弹出列表。
-- [ ] 使用去箭头、8px宽的独立Scrollbar样式；可见/隐藏两种颜色，1400ms空闲隐藏，悬停/拖动期间保持；卸载和销毁取消计时器。
-- [ ] 修改export_signature_ui.py补齐平面边框及焦点颜色，并为四个下拉框安装辅助类。
-- [ ] 静态复查原生选择/关闭绑定、计时器与销毁、只影响当前控件的范围；纯语法编译和独立只读复核。
+- [x] 新建invoice_desktop/ui_selectors.py，提供style_combobox_popup(combo, font, palette)，仅配置该控件的Tk原生弹出列表。
+- [x] 使用去箭头、8px宽的独立Scrollbar样式；可见/隐藏两种颜色，1400ms空闲隐藏，悬停/拖动期间保持；卸载和销毁取消计时器。
+- [x] 修改export_signature_ui.py补齐平面边框及焦点颜色，并为四个下拉框安装辅助类。
+- [x] 静态复查原生选择/关闭绑定、计时器与销毁、只影响当前控件的范围；纯语法编译和独立只读复核。
 
 ## Task 2: 本地更新
 
-- [ ] 更新说明和发布记录，构建并核对EXE内应用代码及原生资源。
-- [ ] 验证旧EXE、规则及私人文件，备份后替换原release/InvoiceSummary。
-- [ ] 打包并逐成员核对1.1.24软件和源码，核对无私人文件或业务文件；记录验证范围。
+- [x] 更新说明和发布记录，构建并核对EXE内应用代码及原生资源。
+- [x] 验证旧EXE、规则及私人文件，备份后替换原release/InvoiceSummary。
+- [x] 打包并逐成员核对1.1.24软件和源码，核对无私人文件或业务文件；记录验证范围。
