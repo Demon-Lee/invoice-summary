@@ -1,35 +1,52 @@
-"""Output chooser with a synchronized portable signature-library summary."""
+"""Output chooser with directly editable, remembered PDF signature choices."""
 import tkinter as tk
 from pathlib import Path
 from tkinter import ttk
 
-from .signature_ui import open_signature_manager
-from .signatures import SLOTS
-from .dialogs import center_dialog, filedialog, messagebox
+from .dialogs import center_dialog, dialog_work_area_size, filedialog
+from .export_signature_ui import ExportSignaturePicker
+from .ui import FONT, PALETTE
+from .ui_widgets import AutoHideScrollbar
 
 
 def choose_export_directory(root, workbook, signature_store):
     dialog = tk.Toplevel(root)
     dialog.withdraw()
     dialog.title("导出验收单与领用单")
-    dialog.resizable(True, False)
+    dialog.resizable(True, True)
     dialog.transient(root)
-    dialog.configure(padx=20, pady=18)
+    dialog.configure(bg=PALETTE["background"])
     dialog.columnconfigure(0, weight=1)
-    directory = tk.StringVar(value=str(Path(workbook).parent / "导出PDF"))
+    dialog.rowconfigure(0, weight=1)
+    directory = tk.StringVar(master=dialog, value=str(Path(workbook).parent / "导出PDF"))
     selected = []
-    displayed_revision = None
-    ttk.Label(dialog, text="分别生成两份 PDF", font=("Microsoft YaHei UI", 12, "bold")).grid(row=0, column=0, sticky="w")
-    ttk.Label(dialog, text="验收单.pdf  ·  领用单.pdf\nA4 横向，所有列在一页宽；明细较多时向下自动分页。",
+    scroller = ttk.Frame(dialog)
+    scroller.grid(row=0, column=0, sticky="nsew", padx=18, pady=(18, 0))
+    scroller.columnconfigure(0, weight=1)
+    scroller.rowconfigure(0, weight=1)
+    canvas = tk.Canvas(scroller, background=PALETTE["background"], highlightthickness=0,
+                       borderwidth=0, width=1, height=1)
+    canvas.grid(row=0, column=0, sticky="nsew")
+    scrollbar = AutoHideScrollbar(scroller, orient="vertical", command=canvas.yview,
+                                  background=PALETTE["background"])
+    scrollbar.attach(canvas, scroller)
+    canvas.configure(yscrollcommand=scrollbar.set)
+    body = ttk.Frame(canvas)
+    body.columnconfigure(0, weight=1)
+    window = canvas.create_window(0, 0, anchor="nw", window=body)
+    ttk.Label(body, text="分别生成两份 PDF", font=(FONT, 12, "bold")).grid(
+        row=0, column=0, sticky="w")
+    ttk.Label(body, text="验收单.pdf  ·  领用单.pdf\nA4 横向，所有列在一页宽；明细较多时向下自动分页。",
               justify="left").grid(row=1, column=0, sticky="w", pady=(8, 12))
-    note = ttk.Label(dialog, text="导出本次执行处理并通过金额核对后保存的表格。更换输入或重新预览后，须再次执行成功才可导出；工作簿外部修改后也须重新处理。",
-                     wraplength=520, justify="left", foreground="#946522")
+    note = ttk.Label(body, text="导出本次执行处理并通过金额核对后保存的表格。更换输入或重新预览后，须再次执行成功才可导出；工作簿外部修改后也须重新处理。",
+                     wraplength=700, justify="left", foreground="#946522")
     note.grid(row=2, column=0, sticky="ew", pady=(0, 14))
-    ttk.Label(dialog, text="保存位置").grid(row=3, column=0, sticky="w")
-    row = ttk.Frame(dialog)
+    ttk.Label(body, text="保存位置").grid(row=3, column=0, sticky="w")
+    row = ttk.Frame(body)
     row.grid(row=4, column=0, sticky="ew", pady=(5, 16))
     row.columnconfigure(0, weight=1)
-    ttk.Entry(row, textvariable=directory, state="readonly", width=58).grid(row=0, column=0, sticky="ew")
+    ttk.Entry(row, textvariable=directory, state="readonly", width=1).grid(row=0, column=0, sticky="ew")
+
     def pick():
         initial = Path(directory.get())
         while not initial.exists() and initial.parent != initial:
@@ -37,73 +54,78 @@ def choose_export_directory(root, workbook, signature_store):
         value = filedialog.askdirectory(title="选择 PDF 保存位置", initialdir=str(initial), parent=dialog)
         if value:
             directory.set(value)
-    ttk.Button(row, text="选择位置…", command=pick).grid(row=0, column=1, padx=(8, 0))
-    signing = ttk.LabelFrame(dialog, text="签名", padding=10)
-    signing.grid(row=5, column=0, sticky="ew", pady=(0, 14))
-    signing.columnconfigure(0, weight=1)
-    include = tk.BooleanVar(value=False)
-    checkbox = ttk.Checkbutton(signing, text="添加已保存签名", variable=include)
-    checkbox.grid(row=0, column=0, sticky="w")
-    signature_summary = ttk.Label(signing, justify="left", wraplength=490)
-    signature_summary.grid(row=1, column=0, columnspan=2, sticky="ew", pady=(7, 0))
-    def refresh_signatures(initial=False):
-        nonlocal displayed_revision
-        try:
-            state = signature_store.read()
-            displayed_revision = signature_store.revision(state)
-            labels = {item["id"]: item["label"] for item in state["items"]}
-            assigned = [(sheet, label, labels[state["bindings"][key]]) for key, sheet, label in SLOTS
-                        if state["bindings"].get(key)]
-            attention = state.get("attention", {})
-            available = bool(assigned or attention)
-            was_disabled = checkbox.instate(("disabled",))
-            if initial or (was_disabled and available):
-                include.set(available)
-            # A refresh must not turn a requested signed export into unsigned.
-            checkbox.configure(state="normal" if available or include.get() else "disabled")
-            summary = [f"{sheet} · {role}：{label}" for sheet, role, label in assigned]
-            if attention:
-                affected = [f"{sheet} · {role}" for key, sheet, role in SLOTS if key in attention]
-                summary.append("需要重新确认：" + "、".join(affected) + "。请打开签名管理，重新选择标签或明确选择不使用签名。")
-            issues = state.get("issues", [])
-            summary.extend(issues[:3])
-            if len(issues) > 3:
-                summary.append(f"另有 {len(issues) - 3} 项，请在签名管理中查看。")
-            if not available and not attention:
-                summary.insert(0, "请放入签名图片，并在签名管理中为签字位置选择标签。")
-            signature_summary.configure(text="\n".join(summary), foreground="#946522" if attention or issues else "#273d5d")
-        except (OSError, ValueError) as exc:
-            displayed_revision = None
-            if initial:
-                include.set(True)
-            checkbox.configure(state="normal")
-            signature_summary.configure(text="签名设置暂不可用：" + str(exc)
-                                        + "\n请重试或进入签名管理；如需无签名导出，请明确取消勾选。", foreground="#946522")
-    def manage():
-        open_signature_manager(dialog, signature_store)
-        refresh_signatures()
-    ttk.Button(signing, text="签名管理…", command=manage).grid(row=0, column=1, sticky="e", padx=(10, 0))
-    refresh_signatures(initial=True)
+
+    pick_button = ttk.Button(row, text="选择位置…", command=pick, style="ExportAction.TButton")
+    pick_button.grid(row=0, column=1, padx=(8, 0))
     buttons = ttk.Frame(dialog)
-    buttons.grid(row=6, column=0, sticky="e")
-    def accept():
-        try:
-            if include.get() and displayed_revision is None:
-                raise ValueError("签名设置尚未读取完成，请刷新并核对标签后再导出。")
-            snapshot = signature_store.snapshot(expected_revision=displayed_revision) if include.get() else None
-            if snapshot is not None and not any(snapshot["bindings"].values()):
-                raise ValueError("签字位置已变化，请在签名管理中重新选择标签。")
-        except (OSError, ValueError) as exc:
-            messagebox.showwarning("签名暂不可用", str(exc), parent=dialog)
-            refresh_signatures()
-            return
+    buttons.grid(row=1, column=0, sticky="ew", padx=18, pady=(12, 16))
+    picker = None
+
+    def close():
+        if picker is None or not picker.saving:
+            dialog.destroy()
+
+    def accepted(snapshot):
         selected.append({"directory": directory.get(), "signatures": snapshot})
         dialog.destroy()
-    ttk.Button(buttons, text="取消", command=dialog.destroy).pack(side="right", padx=(8, 0))
-    start = ttk.Button(buttons, text="开始导出", command=accept, style="Primary.TButton")
+
+    def accept():
+        picker.confirm(accepted)
+
+    cancel = ttk.Button(buttons, text="取消", command=close, style="ExportAction.TButton")
+    cancel.pack(side="right", padx=(8, 0))
+    start = ttk.Button(buttons, text="开始导出", command=accept, style="ExecuteAction.TButton")
     start.pack(side="right")
-    dialog.bind("<Escape>", lambda event: dialog.destroy())
-    dialog.bind("<Configure>", lambda event: note.configure(wraplength=max(240, dialog.winfo_width() - 40)) if event.widget is dialog else None)
+
+    def controls():
+        # Initial panel construction can notify before its assignment completes.
+        if picker is not None:
+            start.configure(state="normal" if picker.can_confirm else "disabled")
+            state = "disabled" if picker.saving else "normal"
+            cancel.configure(state=state)
+            pick_button.configure(state=state)
+
+    picker = ExportSignaturePicker(body, signature_store, controls)
+    picker.frame.grid(row=5, column=0, sticky="ew")
+    controls()
+
+    def sync_scroll(event=None):
+        width = max(1, canvas.winfo_width() - 16)
+        canvas.itemconfigure(window, width=width)
+        height = max(body.winfo_reqheight(), canvas.winfo_height())
+        canvas.configure(scrollregion=(0, 0, canvas.winfo_width(), height))
+        if body.winfo_reqheight() <= canvas.winfo_height():
+            canvas.yview_moveto(0)
+        note.configure(wraplength=max(200, width - 8))
+        picker.status.configure(wraplength=max(200, width - 8))
+
+    def wheel(event):
+        if body.winfo_reqheight() > canvas.winfo_height():
+            number = getattr(event, "num", None)
+            delta = getattr(event, "delta", 0)
+            units = -1 if number == 4 or delta > 0 else 1 if number == 5 or delta < 0 else 0
+            if units:
+                canvas.yview_scroll(units, "units")
+        return "break"
+
+    def destroyed(event):
+        if event.widget is dialog:
+            picker.close()
+
+    body.bind("<Configure>", sync_scroll)
+    canvas.bind("<Configure>", sync_scroll)
+    dialog.bind("<Destroy>", destroyed, add="+")
+    dialog.bind("<Escape>", lambda event: close())
+    dialog.protocol("WM_DELETE_WINDOW", close)
+    for sequence in ("<MouseWheel>", "<Shift-MouseWheel>", "<Button-4>", "<Button-5>"):
+        dialog.bind(sequence, wheel)
+    available_width, available_height = dialog_work_area_size(root)
+    width, height_limit = min(800, max(1, available_width - 80)), max(1, available_height - 80)
+    dialog.geometry(f"{width}x{min(540, height_limit)}")
+    dialog.minsize(min(600, width), min(360, height_limit))
+    dialog.update_idletasks()
+    height = min(height_limit, body.winfo_reqheight() + buttons.winfo_reqheight() + 48)
+    dialog.geometry(f"{width}x{height}")
     center_dialog(dialog, root)
     dialog.deiconify()
     dialog.wait_visibility()

@@ -661,6 +661,25 @@ class SignatureStore:
     def snapshot(self, expected_revision=None):
         config = self._read()
         self._expected(config, expected_revision)
+        return self._snapshot(config)
+
+    @_serialized
+    def save_export_selection(self, bindings, expected_revision=None):
+        """Validate selected image bytes before remembering all four positions."""
+        if not isinstance(bindings, dict) or set(bindings) != set(_KEYS):
+            raise ValueError("请确认全部四个签字位置")
+        config = self._read()
+        self._expected(config, expected_revision)
+        for item_id in bindings.values():
+            if item_id is not None:
+                self._item(config, item_id)
+        selected = dict(config, bindings=dict(bindings), attention={})
+        snapshot = self._snapshot(selected)
+        if selected != config:
+            self._save(selected)
+        return snapshot
+
+    def _snapshot(self, config):
         if config["attention"]:
             raise ValueError("签字位置存在待确认的图片变化，请重新选择签名或明确选择不使用签名")
         assigned = set(config["bindings"].values()) - {None}

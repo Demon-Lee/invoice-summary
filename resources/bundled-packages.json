@@ -15,9 +15,9 @@
   },
   {
     "package": "Pillow",
-    "version": "12.3.0",
+    "version": "13.0.0",
     "license_files": [
-      "resources\\licenses\\Pillow\\LICENSE"
+      "resources\\licenses\\Pillow\\licenses-LICENSE"
     ]
   },
   {

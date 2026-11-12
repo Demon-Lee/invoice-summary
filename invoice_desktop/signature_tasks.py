@@ -131,6 +131,8 @@ class SignatureTasks:
         return previews
 
     def _perform(self, kind, args, kwargs):
+        if kind == "save_export":
+            return self.store.save_export_selection(*args, **kwargs)
         if kind == "preview":
             item_id, revision = args
             raw = self.store.image_bytes(item_id, expected_revision=revision, size=(280, 180))
