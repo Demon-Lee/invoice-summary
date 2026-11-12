@@ -11,6 +11,7 @@ from .signature_tasks import SignatureTasks
 from .signature_ui import open_signature_manager
 from .signatures import SLOTS
 from .ui import FONT, PALETTE, surface
+from .ui_selectors import style_combobox_popup
 
 
 class ExportSignaturePicker:
@@ -67,11 +68,16 @@ class ExportSignaturePicker:
         style = ttk.Style(self.frame)
         style.configure("ExportSignature.TCombobox", font=(FONT, 10), padding=(7, 6),
                         arrowsize=14, foreground=PALETTE["text"], fieldbackground="#fafbfd",
-                        background="#fafbfd", bordercolor="#d9e1eb", arrowcolor=PALETTE["blue"])
+                        background="#fafbfd", bordercolor="#d9e1eb", arrowcolor=PALETTE["blue"],
+                        relief="flat", borderwidth=1, lightcolor="#d9e1eb", darkcolor="#d9e1eb")
         style.map("ExportSignature.TCombobox",
                   fieldbackground=[("disabled", "#f0f3f7"), ("readonly", "#fafbfd")],
                   selectbackground=[("readonly", "#fafbfd")],
-                  selectforeground=[("readonly", PALETTE["text"])])
+                  selectforeground=[("readonly", PALETTE["text"])],
+                  background=[("disabled", "#f0f3f7"), ("!disabled", "#fafbfd")],
+                  bordercolor=[("focus", "#8caff7"), ("active", "#8caff7")],
+                  lightcolor=[("focus", "#8caff7"), ("active", "#8caff7")],
+                  darkcolor=[("focus", "#8caff7"), ("active", "#8caff7")])
         style.configure("ExportSignaturePreview.TLabel", background="#f8fafc",
                         foreground=PALETTE["muted"], font=(FONT, 9))
         cards = {}
@@ -89,6 +95,7 @@ class ExportSignaturePicker:
             ttk.Label(card, text=role, style="Muted.TLabel").grid(
                 row=1, column=column, sticky="w", padx=padding, pady=(0, 5))
             combo = ttk.Combobox(card, state="disabled", width=1, style="ExportSignature.TCombobox")
+            style_combobox_popup(combo, font=(FONT, 10), palette=PALETTE)
             combo.grid(row=2, column=column, sticky="ew", padx=padding)
             combo.bind("<<ComboboxSelected>>", lambda event, slot=key: self._choose(slot))
             for sequence in ("<MouseWheel>", "<Shift-MouseWheel>", "<Button-4>", "<Button-5>"):
