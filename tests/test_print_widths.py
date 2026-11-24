@@ -55,13 +55,16 @@ class PrintWidthTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp:
             script=Path(temp)/'rows.ps1'
             source="$ErrorActionPreference = 'Stop'\n. '"+str(LIBRARY).replace("'","''")+"'\n"
-            source+="@( (Get-InvoicePrintRowHeight 30 23.1), (Get-InvoicePrintRowHeight 14.25 22.5) ) | ConvertTo-Json -Compress"
+            source+="@( (Get-InvoicePrintRowHeight 30 23.1), (Get-InvoicePrintRowHeight 14.25 22.5), (Get-InvoicePrintRowHeight 15 23.1 $true), (Get-InvoicePrintRowHeight 43.5 23.1 $true) ) | ConvertTo-Json -Compress"
             script.write_text(source,encoding='utf-8-sig')
             result=subprocess.run(['powershell.exe','-NoProfile','-NonInteractive','-ExecutionPolicy','Bypass','-File',str(script)],capture_output=True,text=True,encoding='utf-8',errors='replace',timeout=15)
             self.assertEqual(result.returncode,0,result.stderr)
             rows=json.loads(result.stdout)
             self.assertGreaterEqual(rows[0],33)
             self.assertEqual(rows[1],22.5)
+            self.assertGreater(rows[2],15)
+            self.assertLess(rows[2],18)
+            self.assertGreater(rows[3],43.5)
 
     def test_signer_span_gets_space_before_long_text_columns(self):
         columns=[self.column(1,40),self.column(2,900,100,3,True),self.column(3,600,72,2,True),
@@ -79,6 +82,18 @@ class PrintWidthTests(unittest.TestCase):
 
 
 class ExportPlanWidthTests(unittest.TestCase):
+    def test_only_filled_detail_rows_can_shrink_below_template_height(self):
+        with tempfile.TemporaryDirectory() as temp:
+            wb = load_workbook(template(Path(temp) / 'sample.xlsx'))
+            ws = wb['领用']
+            ws['A4'] = 1
+            ws['B4'] = '器材'
+            ws['A6'] = 2
+            ws['B6'] = '带换行的名称'
+            plan = _sheet_plan(ws, '领用单.pdf')
+            self.assertEqual(plan['print_detail_rows'], [4, 6])
+            wb.close()
+
     def test_date_value_keeps_its_merged_span(self):
         with tempfile.TemporaryDirectory() as temp:
             wb=load_workbook(template(Path(temp)/'sample.xlsx'))

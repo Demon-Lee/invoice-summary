@@ -66,9 +66,10 @@ function Set-InvoicePrintColumnWidth($column, [double]$points) {
     }
 }
 
-function Get-InvoicePrintRowHeight([double]$AutoHeight, [double]$MinimumHeight) {
-    # WPS screen AutoFit can underestimate the PDF printer's line leading.
-    # Preserve source minima and reserve space for the printed glyph bounds.
+function Get-InvoicePrintRowHeight([double]$AutoHeight, [double]$MinimumHeight, [bool]$Compact = $false) {
+    # AutoFit measures the tallest cell, including every wrapped line.
+    # Keep a small allowance for printer metrics and native height rounding.
+    if ($Compact) { return $AutoHeight + 1.5 }
     return [Math]::Max($MinimumHeight, $AutoHeight + 3.0)
 }
 
@@ -124,6 +125,8 @@ function Fit-InvoicePrintContent($book, $item, $pageSetup) {
         $rows = $sheet.Rows
         $application = $book.Application
         $functions = $application.WorksheetFunction
+        $detailRows = @{}
+        foreach ($index in $item.print_detail_rows) { $detailRows[[int]$index] = $true }
         $rowMinima = @{}
         for ($index = $first; $index -le $last; $index++) {
             $row = $null
@@ -202,12 +205,14 @@ function Fit-InvoicePrintContent($book, $item, $pageSetup) {
         # The PDF printer can wrap CJK text one line earlier than WPS's screen
         # metrics. Measure row heights with narrower text columns, then restore
         # the actual print widths before applying the captured heights.
+        $rowWidthFactor = [double]$item.print_row_width_factor
+        if ($rowWidthFactor -lt 0.85 -or $rowWidthFactor -gt 1.0) { throw 'Invalid row measurement width factor.' }
         foreach ($width in $widths) {
             if (-not $width.wrap) { continue }
             $column = $null
             try {
                 $column = $columns.Item([int]$width.index)
-                Set-InvoicePrintColumnWidth $column ([double]$width.actual_width * 0.85)
+                Set-InvoicePrintColumnWidth $column ([double]$width.actual_width * $rowWidthFactor)
             } finally { Release-InvoiceLayoutCom $column }
         }
         $bandRows = $band.Rows
@@ -233,9 +238,12 @@ function Fit-InvoicePrintContent($book, $item, $pageSetup) {
             try {
                 $row = $rows.Item($index)
                 $autoHeight = [double]$autoHeights[$index]
-                $height = Get-InvoicePrintRowHeight $autoHeight ([double]$rowMinima[$index])
+                $compact = $detailRows.ContainsKey($index)
+                $height = Get-InvoicePrintRowHeight $autoHeight ([double]$rowMinima[$index]) $compact
                 if ($height -ge 408.0) { throw ('Row ' + $index + ': wrapped text exceeds the safe row-height limit.') }
-                if ([double]$row.RowHeight -lt $height) { $row.RowHeight = $height }
+                if ([double]$row.RowHeight -lt $height -or ($compact -and [double]$row.RowHeight -gt $height)) {
+                    $row.RowHeight = $height
+                }
                 [void]$fittedRows.Add(@{ row = $index; auto_height = $autoHeight;
                     minimum_height = [double]$rowMinima[$index]; actual_height = [double]$row.RowHeight })
             } finally { Release-InvoiceLayoutCom $row }

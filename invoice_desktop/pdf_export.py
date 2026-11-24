@@ -13,13 +13,14 @@ from openpyxl.utils.cell import range_boundaries
 from .controller import ExcelAdapter
 from .updates import sha256
 from .layout import sheet_layout
-from .pdf_layout import layout_reports, validate_pdf_layout
+from .pdf_layout import PDFContentFitError, layout_reports, validate_pdf_layout
 from .signatures import SLOTS
 from .workbook import text
 from .pdf_signatures import add_signatures
 from .invoice_pdf_summary import FILENAME as INVOICE_SUMMARY, snapshot_invoices, merge_invoice_pdfs, verify_sources
 
 OUTPUTS = {"验收": "验收单.pdf", "领用": "领用单.pdf"}
+_SAFE_ROW_WIDTH_FACTOR = 0.85
 
 
 class ProcessedWorkbookChanged(ValueError):
@@ -46,10 +47,18 @@ def output_fingerprints(directory, *, include_invoice_summary=False):
     return {name: _fingerprint(directory / name) for name in names}
 
 
-def _sheet_plan(ws, filename, with_signatures=False):
+def _sheet_plan(ws, filename, with_signatures=False, *, office_backend=None):
     plan = sheet_layout(ws)
     plan["file_name"] = filename
     footer = plan["footer_row"]
+    # With ten columns, a narrow measurement probe makes many acceptance
+    # manufacturer names appear to wrap even when they fit in the printed cell.
+    plan["print_row_width_factor"] = _SAFE_ROW_WIDTH_FACTOR
+    if ws.title == "验收":
+        plan["print_row_width_factor"] = 0.90 if office_backend == "Excel" else 0.94
+    sequence_column = plan["columns"]["序号"]
+    plan["print_detail_rows"] = [row for row in range(plan["header_row"] + 1, plan["last_detail_row"] + 1)
+                                 if text(ws.cell(row, sequence_column).value)]
     main_end = max(cell.column for cell in ws[plan["header_row"]] if cell.value is not None)
     roles = {plan["columns"][key]: value for key, value in (
         ("产品名称", (100.0, 3.0)), ("规格型号", (72.0, 2.0)), ("单位", (28.0, 0.25)))}
@@ -108,13 +117,14 @@ def _source_cells(ws, sheet):
     return result
 
 
-def _print_plan(workbook, with_signatures=False, *, source_cells=None):
+def _print_plan(workbook, with_signatures=False, *, source_cells=None, office_backend=None):
     wb = load_workbook(workbook, read_only=False, data_only=False, keep_links=False)
     try:
         missing = set(OUTPUTS) - set(wb.sheetnames)
         if missing:
             raise ValueError("工作簿缺少工作表：" + "、".join(sorted(missing)))
-        sheets = [_sheet_plan(wb[name], filename, with_signatures) for name, filename in OUTPUTS.items()]
+        sheets = [_sheet_plan(wb[name], filename, with_signatures, office_backend=office_backend)
+                  for name, filename in OUTPUTS.items()]
         if source_cells is not None:
             source_cells.update({sheet["name"]: _source_cells(wb[sheet["name"]], sheet) for sheet in sheets})
         return {"schema_version": 1, "sheets": sheets}
@@ -157,6 +167,29 @@ def _validate_pdfs(stage, plan, report, source_cells):
             validate_pdf_layout(pdf, sheet, layouts[sheet["name"]], source_cells.get(sheet["name"]))
             files.append({"sheet": sheet["name"], "name": path.name, "pages": len(pdf.pages)})
     return files
+
+
+def _export_tables(office, workbook, plan, stage, scratch, source_cells, progress):
+    plan_file, report_file = scratch / "plan.json", scratch / "report.json"
+    while True:
+        plan_file.write_text(json.dumps(plan, ensure_ascii=False), encoding="utf-8")
+        office.export_pdf(workbook, plan_file, stage, report_file)
+        report = json.loads(report_file.read_text(encoding="utf-8-sig"))
+        if report.get("status") != "completed" or report.get("sheets") != plan["sheets"]:
+            raise ValueError("表格软件导出结果不完整，未替换已有 PDF")
+        try:
+            return _validate_pdfs(stage, plan, report, source_cells), report
+        except PDFContentFitError as error:
+            sheet = next((s for s in plan["sheets"] if s["name"] == error.sheet), None)
+            if sheet is None or sheet.get("print_row_width_factor", _SAFE_ROW_WIDTH_FACTOR) <= _SAFE_ROW_WIDTH_FACTOR:
+                raise
+            # One retry on the previously verified, roomier sizing. The first
+            # attempt stays private and neither attempt publishes unchecked PDFs.
+            sheet["print_row_width_factor"] = _SAFE_ROW_WIDTH_FACTOR
+            for filename in OUTPUTS.values():
+                (stage / filename).unlink(missing_ok=True)
+            report_file.unlink()
+            progress(f"{error.sheet}单的紧凑排版需要更多行高，正在重新导出…")
 
 
 def _publish_outputs(stage, directory, approved, installed):
@@ -236,18 +269,14 @@ def export_workbook_pdfs(workbook, directory, approved, *, progress=None, excel=
             progress("正在核对本次发票清单并读取原始 PDF…")
             invoice_snapshots = snapshot_invoices(invoice_sources, scratch, directory)
         source_cells = {}
-        plan = _print_plan(snapshot, with_signatures=signatures is not None, source_cells=source_cells)
+        office = excel or ExcelAdapter()
+        plan = _print_plan(snapshot, with_signatures=signatures is not None, source_cells=source_cells,
+                           office_backend=getattr(office, "backend", None))
         directory.mkdir(parents=True, exist_ok=True)
         stage = Path(tempfile.mkdtemp(prefix=".invoice-pdf-stage-", dir=directory)).resolve()
-        plan_file, report_file = scratch / "plan.json", scratch / "report.json"
-        plan_file.write_text(json.dumps(plan, ensure_ascii=False), encoding="utf-8")
         progress("正在通过表格软件导出验收单和领用单，请稍候…")
-        (excel or ExcelAdapter()).export_pdf(snapshot, plan_file, stage, report_file)
-        report = json.loads(report_file.read_text(encoding="utf-8-sig"))
-        if report.get("status") != "completed" or report.get("sheets") != plan["sheets"]:
-            raise ValueError("表格软件导出结果不完整，未替换已有 PDF")
         # Always prove the unsigned PDF before signature insertion can run.
-        files = _validate_pdfs(stage, plan, report, source_cells)
+        files, report = _export_tables(office, snapshot, plan, stage, scratch, source_cells, progress)
         if signatures is not None:
             progress("正在定位四处签字栏并添加已保存签名…")
             signing_report = add_signatures(stage, plan, signatures)

@@ -165,7 +165,9 @@ function Test-TailFits($nativeBreaks, $geometry, $worksheet, [int]$zoom,
         $flowRange = $worksheet.Range([string]$tailPageStart + ':' + [string]$geometry.tail_end_row)
         $flowHeight = [double]$flowRange.Height
         if ($tailPageStart -gt 1) { $flowHeight += $titleHeight }
-        return (($flowHeight * $zoom / 100.0) -le ($availableHeight + 0.75))
+        # The PDF renderer can break just before the last row even when the
+        # worksheet print preview says it fits. Leave room for that rounding.
+        return (($flowHeight * $zoom / 100.0) -le ($availableHeight - 8.0))
     } finally { Release-Com $flowRange }
 }
 

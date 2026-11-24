@@ -1,4 +1,4 @@
 """Offline invoice desktop application."""
 
-__version__ = "1.1.26"
+__version__ = "1.1.27"
 

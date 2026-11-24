@@ -213,23 +213,39 @@ class ExportFlowTests(unittest.TestCase):
         self.output.mkdir()
         self.plan={'schema_version':1,'sheets':[dict(name='验收',file_name='验收单.pdf'),dict(name='领用',file_name='领用单.pdf')]}
 
-    def export(self,include=True,during_office=None):
+    def export(self,include=True,during_office=None,validation_error=None):
         calls=[]
+        factors=[]
         test=self
         class FakeOffice:
             def export_pdf(self,book,plan_file,stage,report_file):
                 calls.append('Office')
-                for item in test.plan['sheets']:
+                plan = json.loads(plan_file.read_text(encoding='utf-8'))
+                factors.append([s.get('print_row_width_factor') for s in plan['sheets']])
+                staged_pdfs = [stage / item['file_name'] for item in plan['sheets']]
+                test.assertTrue(all(not path.exists() for path in staged_pdfs))
+                test.assertFalse(report_file.exists())
+                for item in plan['sheets']:
                     make_pdf(stage/item['file_name'],[("table page",842,595,0)])
-                report_file.write_text(json.dumps(dict(status='completed',sheets=test.plan['sheets'])),encoding='utf-8')
+                report_file.write_text(json.dumps(dict(status='completed',sheets=plan['sheets'])),encoding='utf-8')
                 if during_office:
                     during_office()
         files=[dict(sheet=s['name'],name=s['file_name'],pages=1) for s in self.plan['sheets']]
         approved=pdf_export.output_fingerprints(self.output,include_invoice_summary=include)
-        with patch.object(pdf_export,'_print_plan',return_value=self.plan),patch.object(pdf_export,'_validate_pdfs',return_value=files):
+        validate = {'return_value': files} if validation_error is None else {'side_effect': [validation_error, files]}
+        with patch.object(pdf_export,'_print_plan',return_value=self.plan),patch.object(pdf_export,'_validate_pdfs',**validate):
             result=pdf_export.export_workbook_pdfs(self.book,self.output,approved,excel=FakeOffice(),
                 expected_workbook_sha256=sha256(self.book),invoice_sources=self.sources if include else None)
+        self.row_factors = factors
         return result,calls
+
+    def test_acceptance_fit_failure_retries_with_more_row_space(self):
+        self.plan['sheets'][0]['print_row_width_factor'] = 0.94
+        self.plan['sheets'][1]['print_row_width_factor'] = 0.85
+        result, calls = self.export(include=False, validation_error=pdf_export.PDFContentFitError('验收', '文字裁切'))
+        self.assertEqual(result['status'], 'completed', result)
+        self.assertEqual(calls, ['Office', 'Office'])
+        self.assertEqual(self.row_factors, [[0.94, 0.85], [0.85, 0.85]])
 
     def test_summary_is_published_with_two_tables(self):
         before=self.book.read_bytes()

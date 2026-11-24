@@ -17,6 +17,14 @@ _EDGE_TOLERANCE = 0.75  # PDF points: rounding/font bearings, never a whole glyp
 _BORDER_CLUSTER_TOLERANCE = 1.0  # Paired paths of one printed border; text checks remain strict.
 
 
+class PDFContentFitError(ValueError):
+    """A printed text or pagination check that can be retried with taller rows."""
+
+    def __init__(self, sheet, message):
+        self.sheet = sheet
+        super().__init__(f"{sheet} PDF 完整排版校验：{message}；未替换已有 PDF")
+
+
 def _error(name, message):
     raise ValueError(f"{name} PDF 完整排版校验：{message}；未替换已有 PDF")
 
@@ -80,7 +88,7 @@ def _cell_chars(page, box, name, address):
         if not (left <= center_x <= right and top <= center_y <= bottom):
             continue
         if (x0 < expanded[0] or y0 < expanded[1] or x1 > expanded[2] or y1 > expanded[3]):
-            _error(name, f"{address} 的文字超出单元格或被裁切")
+            raise PDFContentFitError(name, f"{address} 的文字超出单元格或被裁切")
         chars.append(char)
     return chars
 
@@ -238,8 +246,10 @@ def validate_pdf_layout(pdf, sheet, native, source):
         _error(name, "缺少实际分页位置")
     for row in breaks:
         _integer(row, name, "分页行", sheet["repeat_end_row"] + 1, sheet["print_end_row"])
-    if breaks != sorted(set(breaks)) or count != len(breaks) + 1 or len(pdf.pages) != count:
+    if breaks != sorted(set(breaks)) or count != len(breaks) + 1:
         _error(name, "实际 PDF 页数与 Excel 分页证明不一致")
+    if len(pdf.pages) != count:
+        raise PDFContentFitError(name, "实际 PDF 页数与 Excel 分页证明不一致")
     start, end = sheet["tail_start_row"], sheet["tail_end_row"]
     if (native.get("tail_start_row") != start or native.get("tail_end_row") != end
             or native.get("repeat_start_row") != sheet["repeat_start_row"]
@@ -311,7 +321,7 @@ def validate_pdf_layout(pdf, sheet, native, source):
             actual = _normalized(extract_text(chars, x_tolerance=1, y_tolerance=2) or "")
             matches = actual == normalized
         if not matches:
-            _error(name, f"第 {page_number} 页 {address} 的文字缺失、被裁切或与 Excel 显示不一致")
+            raise PDFContentFitError(name, f"第 {page_number} 页 {address} 的文字缺失、被裁切或与 Excel 显示不一致")
     if seen != expected:
         missing = sorted(expected - seen, key=lambda item: (item[1], coordinate_to_tuple(item[0])))
         address, page_number = missing[0]
