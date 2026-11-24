@@ -17,6 +17,8 @@ Coordinate `scripts/invoice_pipeline.py` and `scripts/write_summary.mjs`. Treat 
 
 ## Invoice-layout and filename rules
 
+- 多页发票必须按页识别明细并按页码、原始行序合并：每页的“小计”“合计”和页脚只结束该页明细，不能使后续发票页被忽略。重复明细仍分别保留。页首在表头之后、首条新明细之前的项目名称续行，仅在可唯一归属于前一页最后一条明细时按项目列坐标拼接；同一视觉行保留可见空格，跨页仅去除排版换行。不得把页眉、页脚或“小计”“合计”并入名称或规格。无法唯一归属续行时报告异常并阻止写入。
+- 多页发票预览必须核对全部页的明细未税金额和税额之和与完整发票价税合计逐分相等；各页小计是该页的校验依据，不能代替整票合计。即使已识别部分明细，只要有页未解析、字段不明确或总额不符，就在预览中报告异常并阻止改名和写表，不能等写入后才发现。
 - Treat both `\u9879\u76ee\u540d\u79f0` and `\u8d27\u7269\u6216\u5e94\u7a0e\u52b3\u52a1\u3001\u670d\u52a1\u540d\u79f0` as detail-table headers. Shenzhen electronic invoices using the latter still use the seller name in the `\u9500\u65b9` section as the production manufacturer.
 - A tax-rate field of `\u514d\u7a0e` or `\u4e0d\u5f81\u7a0e` means a valid zero-tax detail. If the PDF omits a unit, write a blank unit cell without raising an exception.
 - 广东电子发票的销方可与深圳版处于同一侧或下方的销方区域。若“名称：”被 PDF 拆为相邻坐标文字（如“名”“称”“：”），按同一视觉行重组标签；买卖方左右并列时选最右标签、上下排列时选最下标签，并只读取该标签后的同一行名称。无法同时确认标签和候选值时保留销方解析异常。
@@ -32,7 +34,7 @@ Coordinate `scripts/invoice_pipeline.py` and `scripts/write_summary.mjs`. Treat 
 - Use only Windows-safe PDF filename components. Replace `/` with `\uff0f` (and other reserved filename characters with their safe equivalents) only in the filename; retain the original project text in Excel.
 - Treat source PDF filenames as opaque: extract the invoice content from the PDF rather than inferring a product or sequence from its original filename. The preview rename plan is the sole source of the final filename.
 - Sort PDFs that have a numeric prefix by that prefix's numeric value (so `2.` precedes `10.`), then assign continuous sequence values from 1. Use those new values consistently in both renamed PDF filenames and the workbook's `\u5e8f\u53f7` column.
-- For rename state, a computed destination equal to its source is `unchanged`, not a collision. In a mixed batch leave `unchanged` files in place and rename only `ready` files; abort the entire rename only when a destination exists for a different source file.
+- For rename state, a computed destination equal to its source is `unchanged`, not a collision. Validate the complete batch mapping: a destination occupied by another uniquely identified `ready` source is allowed only when that source will vacate it in the same batch. Duplicate sources or destinations, external occupants, and occupants blocked from moving still abort the entire batch; propagate blocked occupants to dependent moves. Leave `unchanged` files in place. Before applying, recheck the full mapping, record original/staged/final paths and content hashes in a recovery manifest, then stage moving sources beside the originals and publish final names without replacing any existing file. On an ordinary failure, reverse completed moves; if reversal is incomplete, retain recovery files and report their directory. A subsequent preview must stop on leftover recovery directories, including when no top-level PDF remains. Verify final destinations against their original source hashes; another batch file may legitimately occupy an old source path.
 - 当 PDF 文本层将明细排在“合计”标签之后，或将相邻数量与单价粘连为一个 token 时，按页面坐标重建字段；仅在数量、单价和未税金额的拆分唯一且逐分校验通过时写入，否则作为异常保留，不得猜测。
 - 当明细因文本层顺序异常进入坐标回退解析时，仍必须合并项目名称列的续行，不能只保留首行。按视觉行顺序重建完整名称，保留拉丁品牌、型号以及同一视觉行独立词之间的可见空格；跨行仅消除排版换行，不得删除原有词间空格或把规格型号列内容误并入名称。
 

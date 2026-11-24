@@ -7,6 +7,7 @@
 )
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'excel_layout.ps1')
+. (Join-Path $PSScriptRoot 'export_layout.ps1')
 . (Join-Path $PSScriptRoot 'office_runtime.ps1')
 [Console]::OutputEncoding = New-Object System.Text.UTF8Encoding($false)
 
@@ -470,33 +471,16 @@ try {
             }
             # Native AutoFit needs the final literal display before computing
             # PDF widths; this affects only the read-only export instance.
-            Fit-InvoiceContent $book $item
-            $padded = @{}
-            foreach ($index in @($item.numeric_columns)) {
-                $numberColumn = $allColumns = $null
-                try {
-                    $allColumns = $sheet.Columns
-                    $numberColumn = $allColumns.Item([int]$index)
-                    $numberColumn.ColumnWidth = [Math]::Min(255.0, [double]$numberColumn.ColumnWidth + 2.0)
-                    $padded[[int]$index] = $true
-                } finally { Release-Com $numberColumn; Release-Com $allColumns }
-            }
+            $printFitting = Fit-InvoicePrintContent $book $item $setup
             foreach ($address in $frozen.Keys) {
-                $numberCell = $numberColumn = $null
+                $numberCell = $null
                 try {
                     $numberCell = $sheet.Range([string]$address)
-                    $columnIndex = [int]$numberCell.Column
-                    if (-not $padded.ContainsKey($columnIndex)) {
-                        $numberColumn = $numberCell.EntireColumn
-                        # Printer font bearings need a small reserve beyond
-                        # screen AutoFit. Only the export copy gets this space.
-                        $numberColumn.ColumnWidth = [Math]::Min(255.0, [double]$numberColumn.ColumnWidth + 2.0)
-                        $padded[$columnIndex] = $true
-                    }
                     if ([string]$numberCell.Text -cne [string]$frozen[$address]) { throw ('Cannot fit numeric print display: ' + $address) }
-                } finally { Release-Com $numberColumn; Release-Com $numberCell }
+                } finally { Release-Com $numberCell }
             }
             $layout = Get-NativeLayout $excel $sheet $setup $item
+            $layout.print_fitting = $printFitting
             # Clear Excel's stale-value display after temporary width/format
             # edits, and reject any actual formula-result change before print.
             [void]$excel.Calculate()

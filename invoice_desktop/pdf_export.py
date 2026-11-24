@@ -8,13 +8,16 @@ from pathlib import Path
 
 import pdfplumber
 from openpyxl import load_workbook
+from openpyxl.utils.cell import range_boundaries
 
 from .controller import ExcelAdapter
 from .updates import sha256
 from .layout import sheet_layout
 from .pdf_layout import layout_reports, validate_pdf_layout
 from .signatures import SLOTS
+from .workbook import text
 from .pdf_signatures import add_signatures
+from .invoice_pdf_summary import FILENAME as INVOICE_SUMMARY, snapshot_invoices, merge_invoice_pdfs, verify_sources
 
 OUTPUTS = {"验收": "验收单.pdf", "领用": "领用单.pdf"}
 
@@ -35,17 +38,53 @@ def _fingerprint(path):
     return sha256(path)
 
 
-def output_fingerprints(directory):
+def output_fingerprints(directory, *, include_invoice_summary=False):
     directory = Path(directory).resolve()
     if directory.exists() and not directory.is_dir():
         raise ValueError(f"导出位置不是文件夹：{directory}")
-    return {name: _fingerprint(directory / name) for name in OUTPUTS.values()}
+    names = (*OUTPUTS.values(), INVOICE_SUMMARY) if include_invoice_summary else tuple(OUTPUTS.values())
+    return {name: _fingerprint(directory / name) for name in names}
 
 
 def _sheet_plan(ws, filename, with_signatures=False):
     plan = sheet_layout(ws)
     plan["file_name"] = filename
     footer = plan["footer_row"]
+    main_end = max(cell.column for cell in ws[plan["header_row"]] if cell.value is not None)
+    roles = {plan["columns"][key]: value for key, value in (
+        ("产品名称", (100.0, 3.0)), ("规格型号", (72.0, 2.0)), ("单位", (28.0, 0.25)))}
+    if "生产厂家" in plan["columns"]:
+        roles[plan["columns"]["生产厂家"]] = (112.0, 2.6)
+    plan["print_columns"] = []
+    for index in range(1, plan["print_end_column"] + 1):
+        wrap = index <= main_end and index not in plan["numeric_columns"]
+        minimum, weight = roles.get(index, (32.0, 0.5)) if wrap else (0.0, 0.0)
+        plan["print_columns"].append(dict(index=index, wrap=wrap, min_width=minimum, weight=weight))
+    plan["print_minimum_cells"] = [cell.coordinate for row in ws.iter_rows(min_row=footer + 1, max_row=plan["print_end_row"], max_col=plan["print_end_column"])
+                                  for cell in row if cell.value is not None and cell.coordinate not in plan["caption_spans"]
+                                  and not any(cell.coordinate in merged for merged in ws.merged_cells.ranges)]
+    # Footer captions share columns with the detail table. Reserve their space
+    # before allocating long product/specification text, even without images.
+    date_label = "验收日期" if ws.title == "验收" else "领用日期"
+    date_cell = next(cell for cell in ws[footer + 1] if text(cell.value).rstrip("：:") == date_label)
+    if date_cell.column <= 4:
+        raise ValueError(f"{ws.title} 日期标签须位于第二个签字位置右侧")
+    date_value = ws.cell(footer + 1, date_cell.column + 1)
+    value_span = plan["caption_spans"].get(date_value.coordinate, date_value.coordinate)
+    for merged in ws.merged_cells.ranges:
+        if date_value.coordinate in merged:
+            value_span = str(merged)
+            break
+    plan["print_footer_spans"] = [
+        dict(kind="signature", anchor=ws.cell(footer + 1, start).coordinate,
+             start_column=start, end_column=end, blank_width=110.0)
+        for start, end in ((1, 3), (4, date_cell.column - 1))
+    ] + [
+        dict(kind="date_label", anchor=date_cell.coordinate, start_column=date_cell.column,
+             end_column=date_cell.column, blank_width=0.0),
+        dict(kind="date_value", anchor=date_value.coordinate, start_column=date_value.column,
+             end_column=range_boundaries(value_span)[2], blank_width=0.0),
+    ]
     if with_signatures:
         row_height = ws.row_dimensions[footer + 1].height or ws.sheet_format.defaultRowHeight or 15.0
         plan["signature_slots"] = []
@@ -54,7 +93,7 @@ def _sheet_plan(ws, filename, with_signatures=False):
             plan["signature_slots"].append({"key": key, "label": label, "row_height": float(row_height),
                                             "font_size": float(cell.font.sz or 11),
                                             "vertical_alignment": cell.alignment.vertical or "bottom"})
-        plan["signature_date_label"] = "验收日期" if ws.title == "验收" else "领用日期"
+        plan["signature_date_label"] = date_label
     return plan
 
 
@@ -120,10 +159,10 @@ def _validate_pdfs(stage, plan, report, source_cells):
     return files
 
 
-def _publish_pair(stage, directory, approved, installed):
-    """Back up both outputs, then replace; roll back any completed replacement."""
+def _publish_outputs(stage, directory, approved, installed):
+    """Back up the selected outputs and reverse any incomplete publication."""
     backups = {}
-    if output_fingerprints(directory) != approved:
+    if output_fingerprints(directory, include_invoice_summary=INVOICE_SUMMARY in approved) != approved:
         raise ValueError("导出目录的同名文件已变化，请重新导出并确认覆盖")
     for name, digest in approved.items():
         if digest is not None:
@@ -133,7 +172,7 @@ def _publish_pair(stage, directory, approved, installed):
                 raise ValueError(f"备份期间文件已变化，请重新导出：{name}")
             backups[name] = backup
     try:
-        for name in OUTPUTS.values():
+        for name in approved:
             if _fingerprint(directory / name) != approved[name]:
                 raise ValueError(f"导出文件已变化，请重新确认：{name}")
             digest = sha256(stage / name)
@@ -160,7 +199,7 @@ def _publish_pair(stage, directory, approved, installed):
 
 
 def export_workbook_pdfs(workbook, directory, approved, *, progress=None, excel=None, expected_workbook_sha256=None,
-                         signatures=None):
+                         signatures=None, invoice_sources=None):
     progress = progress or (lambda message: None)
     workbook, directory = Path(workbook).resolve(), Path(directory).resolve()
     result = {"status": "failed", "workbook": str(workbook), "output_dir": str(directory), "files": [], "cleanup": "完成"}
@@ -168,15 +207,19 @@ def export_workbook_pdfs(workbook, directory, approved, *, progress=None, excel=
     installed = {}
     published = False
     signing_report = None
+    include_invoice_summary = invoice_sources is not None
+    invoice_snapshots = None
+    result["invoice_summary_requested"] = include_invoice_summary
     temp_parent = Path(tempfile.gettempdir()).resolve()
     try:
         if workbook.suffix.lower() != ".xlsx" or not workbook.is_file():
             if expected_workbook_sha256 is not None:
                 raise ProcessedWorkbookChanged("本次处理完成的工作簿已不可用，请重新预览并执行处理后再导出")
             raise ValueError("请选择已有的 .xlsx 工作簿")
-        if not isinstance(approved, dict) or set(approved) != set(OUTPUTS.values()):
+        names = {*OUTPUTS.values(), INVOICE_SUMMARY} if include_invoice_summary else set(OUTPUTS.values())
+        if not isinstance(approved, dict) or set(approved) != names:
             raise ValueError("导出文件确认信息不完整，请重新导出")
-        if output_fingerprints(directory) != approved:
+        if output_fingerprints(directory, include_invoice_summary=include_invoice_summary) != approved:
             raise ValueError("导出目录的同名文件已变化，请重新确认")
         progress("正在读取已保存的工作簿，准备 PDF 排版…")
         scratch = Path(tempfile.mkdtemp(prefix="invoice-pdf-input-", dir=temp_parent)).resolve()
@@ -189,6 +232,9 @@ def export_workbook_pdfs(workbook, directory, approved, *, progress=None, excel=
             if expected_workbook_sha256 is not None:
                 raise ProcessedWorkbookChanged("工作簿在读取期间发生变化，请重新预览并执行处理后再导出")
             raise ValueError("工作簿在读取期间发生变化，请保存并关闭后重新导出")
+        if include_invoice_summary:
+            progress("正在核对本次发票清单并读取原始 PDF…")
+            invoice_snapshots = snapshot_invoices(invoice_sources, scratch, directory)
         source_cells = {}
         plan = _print_plan(snapshot, with_signatures=signatures is not None, source_cells=source_cells)
         directory.mkdir(parents=True, exist_ok=True)
@@ -208,9 +254,14 @@ def export_workbook_pdfs(workbook, directory, approved, *, progress=None, excel=
         progress("正在检查两份 PDF 并保存到导出目录…")
         if signatures is not None:
             files = _validate_pdfs(stage, plan, report, source_cells)
+        if include_invoice_summary:
+            progress("正在按明细序号生成发票汇总并核对全部页面…")
+            files.append(merge_invoice_pdfs(invoice_snapshots, stage / INVOICE_SUMMARY))
         if sha256(workbook) != before:
             raise ProcessedWorkbookChanged("工作簿在导出期间发生变化，请重新预览并执行处理后再导出")
-        _publish_pair(stage, directory, approved, installed)
+        if include_invoice_summary:
+            verify_sources(invoice_sources)
+        _publish_outputs(stage, directory, approved, installed)
         published = True
         result.update(status="completed", files=[dict(item, path=str(directory / item["name"])) for item in files])
         if signing_report is not None:

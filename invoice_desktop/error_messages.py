@@ -7,6 +7,16 @@ def error_summary(value):
     text = str(value).strip()
     lower = text.lower()
     office = "WPS" if "wps" in lower else "Excel" if "excel" in lower else "表格软件"
+    if "wrapped text exceeds" in lower:
+        row = re.search(r"Row\s+(\d+)", text, re.I)
+        location = f"第 {row.group(1)} 行" if row else "部分明细"
+        return location + "换行后仍然过长，无法完整导出。请核对该行内容与模板布局，再重新导出。"
+    if "发票汇总" in text and ("交互表单" in text or "可选图层" in text):
+        return "发票中包含暂不支持直接合并的交互表单或图层。请复制错误信息，核对对应文件。"
+    if "发票汇总" in text and ("变化" in text or "不可用" in text):
+        return "发票汇总的原始发票已变化或缺失。请恢复文件后重试，或重新预览并执行处理。"
+    if "发票汇总" in text and "无法读取" in text:
+        return "发票汇总中有无法读取的 PDF，已停止保存本次文件。请复制错误信息，核对对应发票后重试。"
     if "自动化组件不可用" in text or "表格软件就绪检查结果无效" in text:
         return "无法启动可用的 WPS 或 Excel 独立实例。请确认已安装桌面版，并关闭目标工作簿后重试。"
     if "恢复未完成" in text:

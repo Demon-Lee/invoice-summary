@@ -289,12 +289,13 @@ class Controller:
         actual = []
         for item in preview.payload["rename_plan"]:
             source, destination = Path(item["source"]), Path(item["destination"])
-            if source == destination and source.is_file():
-                status = "unchanged"
-            elif destination.is_file() and not source.exists():
-                status = "renamed"
-            else:
-                status = "not_completed"
+            status = "not_completed"
+            try:
+                if destination.is_file() and sha256(destination) == preview.fingerprints[str(source)]:
+                    # Another invoice may now legitimately occupy source.
+                    status = "unchanged" if source == destination else "renamed"
+            except (OSError, KeyError):
+                pass
             actual.append(dict(item, status=status))
         return actual
 
@@ -397,7 +398,8 @@ class Controller:
             if source.parent != result.pdf_dir or destination.parent != result.pdf_dir:
                 result.issues.append("改名计划超出所选文件夹")
             if item.get("status") not in ("ready", "unchanged"):
-                result.issues.append(f"文件重名或改名状态异常：{destination.name}")
+                reason = item.get("reason")
+                result.issues.append(f"文件重名或改名状态异常：{destination.name}" + (f"；{reason}" if reason else ""))
             if str(source).casefold() in sources or str(destination).casefold() in targets:
                 result.issues.append("改名计划包含重复来源或目标")
             sources.add(str(source).casefold())

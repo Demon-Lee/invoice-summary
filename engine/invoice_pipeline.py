@@ -1,7 +1,10 @@
 import argparse
+import hashlib
 import json
+import os
 import re
 import sys
+import tempfile
 from decimal import Decimal, DecimalException, InvalidOperation, ROUND_HALF_UP
 from pathlib import Path
 
@@ -192,42 +195,84 @@ def build_rename_plan(pairs, sequences=None):
         destination = source_path.with_name(
             f"{sequence}. {safe_filename_component(project)}.pdf"
         )
-        if source_path.resolve() == destination.resolve():
-            status = "unchanged"
-        elif destination.exists():
-            status = "collision"
-        else:
-            status = "ready"
         plan.append(
             {
                 "source": str(source_path),
                 "destination": str(destination),
-                "status": status,
+                "status": "ready",
             }
         )
-    return plan
+    return _validate_combined_rename_plan(plan)
+
+
+def _path_key(path):
+    return str(Path(path).resolve()).casefold()
+
+
+def _rename_recovery_directories(parents):
+    return sorted({path for parent in parents for path in Path(parent).glob(".invoice-rename-*")
+                   if path.is_dir() and any(path.iterdir())})
 
 
 def _validate_combined_rename_plan(entries):
-    """Mark competing destinations as collisions without changing unchanged entries."""
+    """Allow an occupied name only when its unique occupant will move too."""
     validated = [dict(entry) for entry in entries]
-    destinations = {}
+    sources, destinations = {}, {}
     for entry in validated:
-        destination = str(Path(entry["destination"]).resolve()).casefold()
+        source, destination = _path_key(entry["source"]), _path_key(entry["destination"])
+        entry.pop("reason", None)
+        entry["status"] = "unchanged" if source == destination else "ready"
+        sources.setdefault(source, []).append(entry)
         destinations.setdefault(destination, []).append(entry)
-    for group in destinations.values():
-        sources = {str(Path(entry["source"]).resolve()).casefold() for entry in group}
-        if len(sources) > 1:
+    for groups, reason in ((sources, "改名计划包含重复来源"), (destinations, "多个文件使用同一目标名称")):
+        for group in groups.values():
+            if len(group) < 2:
+                continue
             for entry in group:
-                if entry["status"] != "unchanged":
-                    entry["status"] = "collision"
+                entry.update(status="collision", reason=reason)
+    recovery = _rename_recovery_directories({Path(e["source"]).parent for e in validated})
+    if recovery:
+        for entry in validated:
+            entry.update(status="collision", reason="恢复未完成，请保留并核对恢复目录：" + str(recovery[0]))
+        return validated
+    # Propagate external/blocked occupants through dependent chains. Cycles
+    # whose destinations are otherwise unique remain valid for staged apply.
+    changed = True
+    while changed:
+        changed = False
+        for entry in validated:
+            if entry["status"] != "ready" or not os.path.lexists(entry["destination"]):
+                continue
+            occupants = sources.get(_path_key(entry["destination"]), [])
+            if len(occupants) != 1 or occupants[0]["status"] != "ready":
+                entry.update(status="collision", reason="目标名称已被不参与本批改名或无法移动的文件占用")
+                changed = True
     return validated
 
 
+def _move_without_overwrite(source, destination):
+    source, destination = Path(source), Path(destination)
+    if os.name == "nt":
+        # Windows rename fails atomically if the destination already exists.
+        source.rename(destination)
+    else:
+        # POSIX rename replaces files. Exclusive hard-link creation preserves
+        # the same no-overwrite guarantee within this one-filesystem batch.
+        os.link(source, destination)
+        try:
+            source.unlink()
+        except OSError:
+            destination.unlink()
+            raise
+
+
 def _apply_rename_entries(entries):
-    """Preflight and apply a complete rename batch without partial changes."""
-    invalid_sources = [entry for entry in entries if not Path(entry["source"]).is_file()]
-    collisions = [entry for entry in entries if entry["status"] == "collision"]
+    """Recheck, stage and publish a batch, reversing moves on normal failures."""
+    validated = _validate_combined_rename_plan(entries)
+    for entry, checked in zip(entries, validated):
+        entry.update(checked)
+    invalid_sources = [entry for entry in entries if not Path(entry["source"]).is_file()
+                       or Path(entry["source"]).is_symlink()]
     if invalid_sources:
         return [
             _exception(
@@ -237,13 +282,57 @@ def _apply_rename_entries(entries):
             )
             for entry in invalid_sources
         ]
+    collisions = [entry for entry in entries if entry["status"] == "collision"]
     if collisions:
-        return [_exception("", "rename", "rename aborted because a destination collision exists")]
-    for entry in entries:
-        if entry["status"] == "ready":
-            Path(entry["source"]).rename(entry["destination"])
+        return [_exception(e["source"], "rename", e["reason"]) for e in collisions]
+    moving = [entry for entry in entries if entry["status"] == "ready"]
+    staging, transfers, completed = {}, [], []
+    errors = []
+    rollback_failed = False
+    try:
+        for index, entry in enumerate(moving):
+            parent = Path(entry["source"]).resolve().parent
+            if parent not in staging:
+                staging[parent] = Path(tempfile.mkdtemp(prefix=".invoice-rename-", dir=parent))
+            transfers.append((entry, staging[parent] / f"{index}.pdf"))
+        # Persist names and hashes before moving the first source. If the
+        # process is killed, the next preview stops at this recovery directory.
+        for parent, directory in staging.items():
+            manifest = [{"source": str(Path(entry["source"]).resolve()),
+                         "destination": str(Path(entry["destination"]).resolve()),
+                         "staged": str(staged),
+                         "sha256": hashlib.sha256(Path(entry["source"]).read_bytes()).hexdigest()}
+                        for entry, staged in transfers if staged.parent == directory]
+            (directory / "recovery.json").write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
+        for entry, staged in transfers:
+            source = Path(entry["source"])
+            _move_without_overwrite(source, staged)
+            completed.append((source, staged))
+        for entry, staged in transfers:
+            destination = Path(entry["destination"])
+            _move_without_overwrite(staged, destination)
+            completed.append((staged, destination))
+        for entry in moving:
             entry["status"] = "renamed"
-    return []
+    except OSError as exc:
+        errors.append(_exception("", "rename", "批量改名未完成：" + str(exc)))
+        for source, destination in reversed(completed):
+            try:
+                _move_without_overwrite(destination, source)
+            except OSError as rollback_error:
+                rollback_failed = True
+                errors.append(_exception(str(destination), "rename", "恢复未完成：" + str(rollback_error)))
+    finally:
+        for directory in staging.values():
+            try:
+                if rollback_failed or any(p.name != "recovery.json" for p in directory.iterdir()):
+                    errors.append(_exception("", "rename", "恢复未完成，请保留并核对恢复目录：" + str(directory)))
+                    continue
+                (directory / "recovery.json").unlink(missing_ok=True)
+                directory.rmdir()
+            except OSError as cleanup_error:
+                errors.append(_exception("", "rename", "恢复目录清理未完成：" + str(directory) + "；" + str(cleanup_error)))
+    return errors
 
 
 def record_filename_project(record: dict) -> str:
@@ -454,6 +543,20 @@ def _join_wrapped_column_words(words: list[dict]) -> str:
     )
 
 
+def _summary_labels(words):
+    """Find total labels by visual row, including spaced 小 计."""
+    found = []
+    for row in _visual_rows(words, tolerance=4):
+        left = sorted((w for w in row if float(w.get("x0", -1)) < 192), key=lambda w: w["x0"])
+        tokens = [re.sub(r"\s+", "", str(w.get("text", ""))) for w in left]
+        for i, token in enumerate(tokens):
+            label = token + tokens[i + 1] if token in {"小", "合"} and i + 1 < len(tokens) and tokens[i + 1] == "计" else token
+            if label in {"小计", "合计", "合"}:
+                found.append((label, left[i]["top"]))
+                break
+    return found
+
+
 def _wrapped_detail_continuations(page_words: list[list[dict]]) -> list[dict]:
     """Return name/spec suffixes from detail rows wrapped within invoice columns."""
     continuations = []
@@ -470,14 +573,8 @@ def _wrapped_detail_continuations(page_words: list[list[dict]]) -> list[dict]:
         )
         for index, start in enumerate(starts):
             next_top = starts[index + 1]["top"] if index + 1 < len(starts) else float("inf")
-            summary_tops = [
-                word["top"] for word in words
-                if word["top"] > start["bottom"]
-                and (
-                    str(word.get("text", "")) in {"\u5408", "\u5408\u8ba1"}
-                    or "\u4ef7\u7a0e\u5408\u8ba1" in str(word.get("text", ""))
-                )
-            ]
+            summary_tops = [top for _, top in _summary_labels(words) if top > start["bottom"]]
+            summary_tops += [word["top"] for word in words if word["top"] > start["bottom"] and "价税合计" in str(word.get("text", ""))]
             end_top = min([next_top, *summary_tops])
             wrapped = [
                 word for word in words
@@ -739,14 +836,8 @@ def _positioned_details(page_words: list[list[dict]], page_chars: list[list[dict
         )
         for index, start in enumerate(starts):
             next_top = starts[index + 1]["top"] if index + 1 < len(starts) else float("inf")
-            summary_tops = [
-                word["top"] for word in words
-                if word["top"] > start["bottom"]
-                and (
-                    str(word.get("text", "")) in {"合", "合计"}
-                    or "价税合计" in str(word.get("text", ""))
-                )
-            ]
+            summary_tops = [top for _, top in _summary_labels(words) if top > start["bottom"]]
+            summary_tops += [word["top"] for word in words if word["top"] > start["bottom"] and "价税合计" in str(word.get("text", ""))]
             end_top = min([next_top, *summary_tops])
             row_words = [
                 word for word in words
@@ -806,13 +897,73 @@ def _parse_detail_line(line, spec_continuation=""):
     return detail
 
 
+def _multipage_details(page_texts, page_words, page_chars, pdf_path):
+    details, exceptions = [], []
+    markers = ("项目名称", "货物或应税劳务、服务名称")
+    for page_index, (text, words, chars) in enumerate(zip(page_texts, page_words, page_chars)):
+        if not any(marker in text for marker in markers):
+            if any(marker in text for marker in INVOICE_CONTENT_MARKERS):
+                exceptions.append(_exception(pdf_path, "details", f"第 {page_index + 1} 页发票明细表头无法识别"))
+            continue
+        lines = _invoice_detail_lines(text)
+        page_details = []
+        for line, continuation in lines:
+            detail = _parse_detail_line(line, continuation)
+            if detail is None:
+                exceptions.append(_exception(pdf_path, "detail", f"第 {page_index + 1} 页明细无法识别: {line}"))
+            else:
+                page_details.append(detail)
+        wrapped = _wrapped_detail_continuations([words])
+        if page_details and len(page_details) == len(lines) == len(wrapped):
+            for detail, (_, continuation), positioned in zip(page_details, lines, wrapped):
+                _apply_detail_continuation(detail, positioned, continuation)
+        elif not lines:
+            page_details = _positioned_details([words], [chars])
+        else:
+            exceptions.append(_exception(pdf_path, "details", f"第 {page_index + 1} 页明细与坐标无法唯一对应"))
+        if not page_details:
+            exceptions.append(_exception(pdf_path, "details", f"第 {page_index + 1} 页没有可识别明细"))
+            continue
+        if page_index and details:
+            header_rows = [row for row in _visual_rows(words, tolerance=4)
+                           if any(marker in "".join(str(w.get("text", "")) for w in sorted(row, key=lambda w: w["x0"])) for marker in markers)]
+            starts = [w for w in words if str(w.get("text", "")).startswith("*") and 0 <= float(w.get("x0", -1)) < 119]
+            if len(header_rows) != 1 or not starts:
+                exceptions.append(_exception(pdf_path, "details", f"第 {page_index + 1} 页续行边界无法确定"))
+            else:
+                header_bottom = max(w.get("bottom", w["top"]) for w in header_rows[0])
+                first_top = min(w["top"] for w in starts)
+                prefix = [w for w in words if header_bottom < w["top"] < first_top]
+                if prefix:
+                    if any(float(w.get("x0", -1)) < 0 or float(w.get("x1", w.get("x0", -1))) > 119 for w in prefix):
+                        exceptions.append(_exception(pdf_path, "details", f"第 {page_index + 1} 页首条明细前存在无法唯一归属的续行"))
+                    else:
+                        details[-1]["name"] += _join_wrapped_name_words(prefix)
+        subtotals = [top for label, top in _summary_labels(words) if label == "小计"]
+        if subtotals:
+            if len(subtotals) != 1:
+                exceptions.append(_exception(pdf_path, "detail_total", f"第 {page_index + 1} 页小计不唯一"))
+            else:
+                money = sorted((w for w in words if float(w.get("x0", -1)) >= 300 and abs(w["top"] - subtotals[0]) <= 10 and re.fullmatch(r"[¥￥]?-?\d+\.\d{2}", str(w.get("text", "")))), key=lambda w: w["x0"])
+                if len(money) != 2:
+                    exceptions.append(_exception(pdf_path, "detail_total", f"第 {page_index + 1} 页小计金额和税额无法唯一识别"))
+                else:
+                    net = sum((_as_decimal(d["amount"]) for d in page_details), Decimal("0.00"))
+                    tax = sum((_as_decimal(d["tax"]) for d in page_details), Decimal("0.00"))
+                    if (net, tax) != tuple(_as_decimal(str(w["text"]).lstrip("¥￥")) for w in money):
+                        exceptions.append(_exception(pdf_path, "detail_total", f"第 {page_index + 1} 页明细与小计不一致"))
+        details.extend(page_details)
+    return details, exceptions
+
+
 def extract_pdf_record(pdf_path, sequence):
     """Read an invoice PDF and return a record plus explicit parse exceptions."""
     pdf_path = Path(pdf_path)
     exceptions = []
     try:
         with pdfplumber.open(pdf_path) as pdf:
-            text = "\n".join(page.extract_text() or "" for page in pdf.pages)
+            page_texts = [page.extract_text() or "" for page in pdf.pages]
+            text = "\n".join(page_texts)
             page_words = [getattr(page, "extract_words", lambda: [])() for page in pdf.pages]
             page_chars = [getattr(page, "chars", []) for page in pdf.pages]
             seller_words = [
@@ -848,7 +999,7 @@ def extract_pdf_record(pdf_path, sequence):
 
     details = []
     text_spec_continuations = []
-    for line, spec_continuation in _invoice_detail_lines(text):
+    for line, spec_continuation in (_invoice_detail_lines(text) if len(page_texts) == 1 else []):
         detail = _parse_detail_line(line, spec_continuation)
         if detail is None:
             exceptions.append(
@@ -861,7 +1012,10 @@ def extract_pdf_record(pdf_path, sequence):
         details, text_spec_continuations, _wrapped_detail_continuations(page_words)
     ):
         _apply_detail_continuation(detail, continuation, text_spec_continuation)
-    if not details:
+    if len(page_texts) > 1:
+        details, page_exceptions = _multipage_details(page_texts, page_words, page_chars, pdf_path)
+        exceptions.extend(page_exceptions)
+    if not details and len(page_texts) == 1:
         details = _positioned_details(page_words, page_chars)
         if details:
             exceptions = [
@@ -883,6 +1037,8 @@ def extract_pdf_record(pdf_path, sequence):
         (_as_decimal(detail["amount"]) + _as_decimal(detail["tax"]) for detail in details),
         Decimal("0.00"),
     )
+    if detail_total != grand_total:
+        return None, [_exception(pdf_path, "detail_total", f"明细含税合计 {detail_total:.2f} 与票面价税合计 {grand_total:.2f} 不一致")]
     try:
         rows = build_rows(sequence, seller, details)
     except ValueError as error:
@@ -1129,6 +1285,11 @@ def main(argv=None):
         _extend_unique_exceptions(payload["exceptions"], source.get("exceptions", []))
     else:
         pdf_paths = _selected_pdfs(arguments)
+        parents = {path.parent for path in pdf_paths}
+        if arguments.pdf_dir:
+            parents.add(Path(arguments.pdf_dir))
+        for recovery in _rename_recovery_directories(parents):
+            payload["exceptions"].append(_exception("", "rename", "恢复未完成，请保留并核对恢复目录：" + str(recovery)))
         invoice_paths = []
         for pdf_path in pdf_paths:
             classification = classify_pdf_document(pdf_path)

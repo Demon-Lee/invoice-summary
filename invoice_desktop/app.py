@@ -17,6 +17,7 @@ from .ui import FONT, PALETTE, build_interface, set_stage_style, surface, skippe
 from .ui_actions import decorate_action_button
 from .pdf_export import export_workbook_pdfs, output_fingerprints
 from .pdf_export_ui import choose_export_directory
+from .invoice_pdf_summary import sources_from_processing
 from .window_icon import set_window_icon
 from .signatures import SignatureStore
 from .signature_ui import open_signature_manager
@@ -693,9 +694,10 @@ class App:
                     result["_pdf_export_receipt"] = {
                         "inputs": inputs, "workbook": str(preview.workbook),
                         "sha256": sha256(preview.workbook), "engine_version": preview.engine_version,
+                        "invoice_sources": sources_from_processing(result, preview.fingerprints),
                     }
-                except OSError as exc:
-                    result["_pdf_export_blocked"] = "无法读取处理完成的工作簿，PDF 导出暂不可用：" + str(exc) + "；请关闭相关文件后重新预览并执行处理。"
+                except (OSError, ValueError) as exc:
+                    result["_pdf_export_blocked"] = "无法准备处理完成后的导出信息，PDF 导出暂不可用：" + str(exc) + "；请关闭相关文件后重新预览并执行处理。"
             return result
         self._run(work, self._render_result, stage="execute")
 
@@ -794,12 +796,12 @@ class App:
             if not options:
                 return
             directory = options["directory"]
-            approved = output_fingerprints(directory)
+            approved = output_fingerprints(directory, include_invoice_summary=options["include_invoice_summary"])
         except (OSError, ValueError) as exc:
             self._show_operation_error("暂不能导出 PDF", exc)
             return
         existing = [str(Path(directory) / name) for name, digest in approved.items() if digest is not None]
-        if existing and not messagebox.askyesno("确认替换已有 PDF", "以下文件已存在：\n\n" + "\n".join(existing) + "\n\n两份 PDF 都生成成功后才会替换。是否继续？", default="no", parent=self.root):
+        if existing and not messagebox.askyesno("确认替换已有 PDF", "以下文件已存在：\n\n" + "\n".join(existing) + "\n\n本次选择的 PDF 全部生成并校验成功后才会替换。是否继续？", default="no", parent=self.root):
             return
         export_issue = self._refresh_pdf_export_receipt()
         if self._pdf_export_receipt is not receipt or not self._can_export_pdf():
@@ -813,6 +815,7 @@ class App:
         self._run(lambda: export_workbook_pdfs(workbook, directory, approved, excel=self.controller.excel,
                                               expected_workbook_sha256=receipt["sha256"],
                                               signatures=options["signatures"],
+                                              invoice_sources=receipt["invoice_sources"] if options["include_invoice_summary"] else None,
                                               progress=lambda msg: self.events.put(("progress", msg))),
                   self._render_pdf_result, stage="export")
 
@@ -846,13 +849,15 @@ class App:
         self._last_pdf_report = report
         if completed:
             self.last_pdf_output_dir = result["output_dir"]
-            detail = "两份 PDF 已保存；A4 横向、所有列一页宽，明细向下自动分页。可点击“打开导出目录”查看。"
+            summary = next((item for item in result["files"] if item.get("invoices") is not None), None)
+            detail = (f"验收单、领用单和发票汇总已保存；汇总含 {summary['invoices']} 张发票、{summary['pages']} 页。" if summary else
+                      "两份表格 PDF 已保存；本次未生成或更新发票汇总。") + "可点击“打开导出目录”查看。"
             tone = "success" if result["cleanup"] == "完成" and not export_issue else "warning"
             reason = "\n".join(f"{item['path']}（{item['pages']} 页）" for item in result["files"])
             if signing:
                 reason += f"\n\n已添加 {len(signing['applied'])} 处签名；原 Excel 未添加签名。"
             diagnostic = result["cleanup"] if result["cleanup"] != "完成" else export_issue
-            title = "PDF 导出完成" if tone == "success" else "PDF 已导出，后续需重新处理" if export_issue else "PDF 已导出，临时文件待清理"
+            title = ("PDF 导出完成（含发票汇总）" if summary else "两份表格 PDF 导出完成") if tone == "success" else "PDF 已导出，后续需重新处理" if export_issue else "PDF 已导出，临时文件待清理"
             self._complete_stage(tone, title, detail, notify=True, reason=reason, diagnostic=diagnostic)
         else:
             reason = result.get("error") or "请复制错误信息反馈具体原因。"
